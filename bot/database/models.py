@@ -1,0 +1,350 @@
+"""SQLAlchemy 2.0 async modellari: User, Driver, Order."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+from typing import Any
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    Text,
+    event,
+    func,
+    inspect,
+    text,
+)
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from bot.config import settings
+
+TZ_UTC = timezone.utc
+
+
+def utcnow() -> datetime:
+    return datetime.now(TZ_UTC)
+
+
+class OrderType(str, Enum):
+    TAXI = "taxi"
+    PARCEL = "parcel"
+
+
+class OrderStatus(str, Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    CONFIRMED = "confirmed"
+    CANCELLED = "cancelled"
+
+
+class DriverStatus(str, Enum):
+    ACTIVE = "active"
+    EXPIRED = "expired"
+    BANNED = "banned"
+
+
+class Direction(str, Enum):
+    BESHARIQ_TASHKENT = "beshariq_tashkent"
+    TASHKENT_BESHARIQ = "tashkent_beshariq"
+
+
+DIRECTION_LABELS: dict[str, tuple[str, str]] = {
+    Direction.BESHARIQ_TASHKENT.value: ("Beshariq", "Toshkent"),
+    Direction.TASHKENT_BESHARIQ.value: ("Toshkent", "Beshariq"),
+}
+
+AREA_LABELS: dict[str, str] = {
+    "markaz": "Markaz",
+    "rapqon": "Rapqon",
+    "vatan": "Vatan",
+    "qaqir": "Qaqir",
+    "yakkatut": "Yakkatut",
+    "other": "Boshqa qishloq",
+}
+
+CANCEL_REASON_LABELS: dict[str, str] = {
+    "price": "💸 Narx to'g'ri kelmadi",
+    "time": "⏰ Vaqt to'g'ri kelmadi",
+    "phone": "📵 Telefon ko'tarmadi",
+}
+
+TRIAL_DAYS = 7
+TRIAL_REMINDER_DAY = 5
+TRIAL_KICK_DAY = 8
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    """Mijoz (yo'lovchi) profili."""
+
+    __tablename__ = "users"
+
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(255), default="")
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
+    )
+
+    orders: Mapped[list[Order]] = relationship(
+        back_populates="passenger",
+        foreign_keys="Order.passenger_id",
+    )
+
+
+class Driver(Base):
+    """Haydovchi profili, 7 kunlik trial va oylik obuna."""
+
+    __tablename__ = "drivers"
+
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(255))
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    car_model: Mapped[str] = mapped_column(String(128))
+    car_number: Mapped[str] = mapped_column(String(32))
+    phone: Mapped[str] = mapped_column(String(32))
+    trial_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    subscription_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default=DriverStatus.ACTIVE.value)
+    notified_day5: Mapped[bool] = mapped_column(Boolean, default=False)
+    notified_day7: Mapped[bool] = mapped_column(Boolean, default=False)
+    kicked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
+    )
+
+    orders: Mapped[list[Order]] = relationship(
+        back_populates="driver",
+        foreign_keys="Order.driver_id",
+    )
+
+    def _aware(self, dt: datetime | None) -> datetime | None:
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=TZ_UTC)
+        return dt
+
+    def has_paid_subscription(self, now: datetime | None = None) -> bool:
+        now = now or utcnow()
+        until = self._aware(self.subscription_until)
+        return until is not None and until > now
+
+    def trial_elapsed(self, now: datetime | None = None) -> timedelta:
+        now = now or utcnow()
+        start = self._aware(self.trial_start) or now
+        return now - start
+
+    def is_access_valid(self, now: datetime | None = None) -> bool:
+        """Guruh va buyurtma olish huquqi (trial yoki to'langan obuna)."""
+        now = now or utcnow()
+        if self.status == DriverStatus.BANNED.value:
+            return False
+        if self.has_paid_subscription(now):
+            return True
+        if self.status != DriverStatus.ACTIVE.value:
+            return False
+        # 8-kungacha (kick oldidan) buyurtma olish huquqi saqlanadi
+        return self.trial_elapsed(now) < timedelta(days=TRIAL_KICK_DAY)
+
+    def remaining_trial_days(self, now: datetime | None = None) -> int:
+        left = timedelta(days=TRIAL_DAYS) - self.trial_elapsed(now)
+        return max(0, left.days)
+
+
+class Order(Base):
+    """Taksi yoki pochta buyurtmasi."""
+
+    __tablename__ = "orders"
+    __table_args__ = (
+        Index("ix_orders_status", "status"),
+        Index("ix_orders_type_status", "order_type", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_type: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default=OrderStatus.PENDING.value)
+    passenger_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id"), index=True
+    )
+    driver_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("drivers.telegram_id"), nullable=True, index=True
+    )
+    direction: Mapped[str] = mapped_column(String(32))
+    area: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    area_custom: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    seats: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    departure_time: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cargo_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    photo_file_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    phone: Mapped[str] = mapped_column(String(32))
+    group_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    group_posts: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    rejected_drivers: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    last_cancel_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, server_default=func.now()
+    )
+
+    passenger: Mapped[User] = relationship(foreign_keys=[passenger_id], back_populates="orders")
+    driver: Mapped[Driver | None] = relationship(foreign_keys=[driver_id], back_populates="orders")
+
+    def area_display(self) -> str:
+        if self.area == "other" and self.area_custom:
+            return self.area_custom
+        if self.area:
+            return AREA_LABELS.get(self.area, self.area)
+        return ""
+
+    def direction_display(self) -> str:
+        origin, dest = DIRECTION_LABELS.get(self.direction, ("Beshariq", "Toshkent"))
+        area = self.area_display()
+        if self.order_type == OrderType.TAXI.value and area:
+            if self.direction == Direction.BESHARIQ_TASHKENT.value:
+                return f"Beshariq ({area}) ➡️ Toshkent"
+            return f"Toshkent ➡️ Beshariq ({area})"
+        return f"{origin} ➡️ {dest}"
+
+    def detail_display(self) -> str:
+        if self.order_type == OrderType.PARCEL.value:
+            return self.cargo_description or "Pochta"
+        return self.seats or "—"
+
+    def icon(self) -> str:
+        return "📦" if self.order_type == OrderType.PARCEL.value else "🚖"
+
+    def detail_icon(self) -> str:
+        return "ℹ️" if self.order_type == OrderType.PARCEL.value else "👥"
+
+    def rejected_id_list(self) -> list[int]:
+        raw = self.rejected_drivers or []
+        result: list[int] = []
+        for item in raw:
+            try:
+                result.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return result
+
+    def add_rejected_driver(self, driver_id: int) -> None:
+        current = self.rejected_id_list()
+        if driver_id not in current:
+            current.append(driver_id)
+        self.rejected_drivers = current
+
+    def posts_map(self) -> dict[int, int]:
+        raw = self.group_posts or {}
+        result: dict[int, int] = {}
+        for key, value in raw.items():
+            try:
+                result[int(key)] = int(value)
+            except (TypeError, ValueError):
+                continue
+        return result
+
+    def set_posts_map(self, posts: dict[int, int]) -> None:
+        self.group_posts = {str(chat_id): message_id for chat_id, message_id in posts.items()}
+
+    def to_group_text(self, *, reactivated: bool = False) -> str:
+        header = (
+            f"⚠️ <b>BUYURTMA QAYTA FAOLLASHDI!</b> (#{self.id})"
+            if reactivated
+            else f"{self.icon()} <b>Yangi buyurtma! (#{self.id})</b>"
+        )
+        return (
+            f"{header}\n"
+            f"📍 <b>Yo'nalish:</b> {self.direction_display()}\n"
+            f"{self.detail_icon()} <b>Tafsilot:</b> {self.detail_display()}\n"
+            f"⚠️ <i>Aloqaga chiqish uchun buyurtmani qabul qiling.</i>"
+        )
+
+    def to_claimed_group_text(self, driver_name: str) -> str:
+        return (
+            f"✅ Buyurtmani <b>{driver_name}</b> qabul qildi (#{self.id})\n"
+            f"📍 {self.direction_display()}\n"
+            f"{self.detail_icon()} {self.detail_display()}"
+        )
+
+    def to_confirmed_group_text(self, driver_name: str) -> str:
+        return (
+            f"✅ <b>Safar tasdiqlandi</b> (#{self.id})\n"
+            f"🚘 Haydovchi: {driver_name}\n"
+            f"📍 {self.direction_display()}"
+        )
+
+    def to_driver_private_text(self, passenger: User | None = None) -> str:
+        passenger_line = ""
+        if passenger:
+            uname = f" @{passenger.username}" if passenger.username else ""
+            passenger_line = f"\n👤 <b>Mijoz:</b> {passenger.full_name}{uname}"
+        return (
+            f"{self.icon()} <b>Buyurtma sizniki! (#{self.id})</b>\n\n"
+            f"📍 <b>Yo'nalish:</b> {self.direction_display()}\n"
+            f"{self.detail_icon()} <b>Tafsilot:</b> {self.detail_display()}\n"
+            f"📞 <b>Telefon:</b> <code>{self.phone}</code>"
+            f"{passenger_line}\n\n"
+            f"Mijoz bilan bog'laning. Natijani pastdagi tugmalar orqali belgilang."
+        )
+
+
+engine: AsyncEngine = create_async_engine(
+    settings.database_url,
+    echo=False,
+    pool_pre_ping=True,
+)
+
+async_session_maker = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autoflush=False,
+)
+
+
+def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:  # type: ignore[no-untyped-def]
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
+
+
+event.listen(engine.sync_engine, "connect", _set_sqlite_pragma)
+
+
+async def init_db() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+        def _add_group_posts(sync_conn) -> None:  # type: ignore[no-untyped-def]
+            columns = [col["name"] for col in inspect(sync_conn).get_columns("orders")]
+            if "group_posts" not in columns:
+                sync_conn.execute(text("ALTER TABLE orders ADD COLUMN group_posts JSON"))
+
+        await conn.run_sync(_add_group_posts)
+
+
+async def dispose_db() -> None:
+    await engine.dispose()

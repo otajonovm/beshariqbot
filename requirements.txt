@@ -1,0 +1,7 @@
+aiogram>=3.31.0,<4.0.0
+sqlalchemy>=2.0.36,<3.0.0
+aiosqlite>=0.20.0
+apscheduler>=3.10.4,<4.0.0
+pydantic>=2.9.0,<3.0.0
+pydantic-settings>=2.6.0
+tzdata>=2024.2
