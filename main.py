@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from typing import Any, Awaitable, Callable
 
+from aiohttp import web
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -67,6 +69,24 @@ async def on_error(event: ErrorEvent) -> None:
     logger.exception("Update ishlovida xato: %s", event.exception)
 
 
+async def start_health_server() -> None:
+    """Heroku web dyno $PORT ni band qiladi, aks holda R10 timeout bo'ladi."""
+    port = os.getenv("PORT")
+    if not port:
+        return
+
+    async def ok(_: web.Request) -> web.Response:
+        return web.Response(text="ok")
+
+    app = web.Application()
+    app.router.add_get("/", ok)
+    app.router.add_get("/health", ok)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", int(port)).start()
+    logger.info("Health server 0.0.0.0:%s", port)
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -93,6 +113,7 @@ async def main() -> None:
     dp.errors.register(on_error)
     dp.workflow_data.update(scheduler=scheduler)
 
+    await start_health_server()
     await bot.delete_webhook(drop_pending_updates=True)
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
