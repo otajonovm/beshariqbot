@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     primary_group_id: int = Field(default=PRIMARY_GROUP_ID)
     primary_group_invite: str = Field(default=PRIMARY_GROUP_INVITE)
     primary_group_title: str = Field(default="426. Global")
+    bot_username: str = Field(default="beshariq_toshkent_taxi_uzbot")
     admin_id: int = Field(..., description="Super-admin Telegram user ID")
     currency: str = Field(default="UZS")
 

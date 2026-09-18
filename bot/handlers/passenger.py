@@ -6,7 +6,7 @@ import logging
 import re
 
 from aiogram import F, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,7 +59,12 @@ async def _cancel_fsm(message: Message, state: FSMContext) -> None:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext, session: AsyncSession) -> None:
+async def cmd_start(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    command: CommandObject,
+) -> None:
     await state.clear()
     user = message.from_user
     if user is None:
@@ -71,6 +76,23 @@ async def cmd_start(message: Message, state: FSMContext, session: AsyncSession) 
         username=user.username,
     )
     await session.commit()
+
+    # Guruhdagi "Buyurtmani olish" → t.me/bot?start=claim_123
+    payload = (command.args or "").strip()
+    if payload.startswith("claim_"):
+        try:
+            order_id = int(payload.split("_", 1)[1])
+        except (ValueError, IndexError):
+            await message.answer("Noto'g'ri buyurtma havolasi.", reply_markup=main_menu_kb())
+            return
+        from bot.handlers.group import process_claim
+
+        result_text = await process_claim(
+            message.bot, session, order_id=order_id, user=user
+        )
+        await message.answer(result_text, reply_markup=main_menu_kb())
+        return
+
     await message.answer(
         "Assalomu alaykum!\n\n"
         "<b>Karvon Taxi: Beshariq — Toshkent</b>\n"

@@ -6,7 +6,7 @@ import logging
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from aiogram.types import CallbackQuery, ChatMemberUpdated, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, ChatMemberUpdated, InlineKeyboardMarkup, Message, User
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
@@ -138,65 +138,41 @@ async def edit_group_card(
     order.set_posts_map(updated)
 
 
-@router.callback_query(F.data.startswith("claim:"))
-async def claim_order_cb(callback: CallbackQuery, session: AsyncSession) -> None:
-    user = callback.from_user
-    if user is None or not callback.data:
-        await callback.answer()
-        return
-    if callback.message is None or callback.message.chat.id not in _order_group_ids():
-        await callback.answer("Bu guruhda buyurtma olinmaydi.", show_alert=True)
-        return
-
-    try:
-        order_id = int(callback.data.split(":", 1)[1])
-    except (ValueError, IndexError):
-        await callback.answer("Noto'g'ri buyurtma.", show_alert=True)
-        return
-
+async def process_claim(
+    bot: Bot,
+    session: AsyncSession,
+    *,
+    order_id: int,
+    user: User,
+) -> str:
+    """
+    Buyurtmani qabul qilish. Natija matni foydalanuvchiga ko'rsatiladi.
+    """
     result, order = await claim_order(session, order_id, user.id)
 
     if result == "not_driver":
-        await callback.answer(
-            "Avval bot orqali haydovchi sifatida ro'yxatdan o'ting.",
-            show_alert=True,
-        )
-        return
+        return "Avval bot orqali haydovchi sifatida ro'yxatdan o'ting."
     if result == "inactive":
-        await callback.answer(
-            "Obuna yoki sinov muddatingiz tugagan. Admin bilan bog'laning.",
-            show_alert=True,
-        )
-        return
+        return "Obuna yoki sinov muddatingiz tugagan. Admin bilan bog'laning."
     if result == "not_found":
-        await callback.answer("Buyurtma topilmadi.", show_alert=True)
-        return
+        return "Buyurtma topilmadi."
     if result == "cooldown":
-        await callback.answer(
-            "Siz bu buyurtmani avval bekor qilgansiz. Boshqa haydovchilar olishi mumkin.",
-            show_alert=True,
-        )
-        return
+        return "Siz bu buyurtmani avval bekor qilgansiz. Boshqa haydovchilar olishi mumkin."
     if result == "taken":
-        await callback.answer(
-            "Kechirasiz, ushbu buyurtmani boshqa haydovchi oldi!",
-            show_alert=True,
-        )
-        return
+        return "Kechirasiz, ushbu buyurtmani boshqa haydovchi oldi!"
     if result != "ok" or order is None:
-        await callback.answer("Xatolik. Qayta urinib ko'ring.", show_alert=True)
-        return
+        return "Xatolik. Qayta urinib ko'ring."
 
     driver = await get_driver(session, user.id)
     driver_name = driver.full_name if driver else user.full_name
-    await edit_group_card(callback.bot, order, order.to_claimed_group_text(driver_name))
+    await edit_group_card(bot, order, order.to_claimed_group_text(driver_name))
     await set_group_posts(session, order.id, order.posts_map())
     await session.commit()
 
     passenger = order.passenger
     private_text = order.to_driver_private_text(passenger)
     try:
-        await callback.bot.send_message(
+        await bot.send_message(
             chat_id=user.id,
             text=private_text,
             reply_markup=deal_kb(order.id),
@@ -204,22 +180,18 @@ async def claim_order_cb(callback: CallbackQuery, session: AsyncSession) -> None
     except TelegramForbiddenError:
         await release_claim(session, order.id, user.id)
         await edit_group_card(
-            callback.bot,
+            bot,
             order,
             order.to_group_text(),
             reply_markup=claim_kb(order.id),
         )
         await set_group_posts(session, order.id, order.posts_map())
         await session.commit()
-        await callback.answer(
-            "Bot sizga lichka yozolmayapti. Avval botni ochib /start bosing, keyin qayta urining.",
-            show_alert=True,
-        )
-        return
+        return "Bot sizga lichka yozolmayapti. /start bosing va qayta urinib ko'ring."
 
     if passenger:
         try:
-            await callback.bot.send_message(
+            await bot.send_message(
                 passenger.telegram_id,
                 f"🚘 Haydovchi <b>{driver_name}</b> buyurtmangizni (#{order.id}) qabul qildi.\n"
                 "Tez orada siz bilan bog'lanadi.",
@@ -227,4 +199,21 @@ async def claim_order_cb(callback: CallbackQuery, session: AsyncSession) -> None
         except TelegramForbiddenError:
             logger.info("Mijoz %s botni bloklagan", passenger.telegram_id)
 
-    await callback.answer("Buyurtma sizniki! Tafsilotlar lichkaga yuborildi.")
+    return f"✅ Buyurtma #{order.id} sizniki! Tafsilotlar yuqorida."
+
+
+@router.callback_query(F.data.startswith("claim:"))
+async def claim_order_cb(callback: CallbackQuery, session: AsyncSession) -> None:
+    """Eski callback tugmalar uchun (agar guruhda qolgan bo'lsa)."""
+    user = callback.from_user
+    if user is None or not callback.data:
+        await callback.answer()
+        return
+    try:
+        order_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Noto'g'ri buyurtma.", show_alert=True)
+        return
+
+    text = await process_claim(callback.bot, session, order_id=order_id, user=user)
+    await callback.answer(text[:200], show_alert=True)

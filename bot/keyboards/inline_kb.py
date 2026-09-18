@@ -51,12 +51,15 @@ def group_invite_kb(links: list[str] | None = None) -> InlineKeyboardMarkup:
 
 
 def claim_kb(order_id: int) -> InlineKeyboardMarkup:
+    from bot.config import settings
+
+    url = f"https://t.me/{settings.bot_username.lstrip('@')}?start=claim_{order_id}"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="🤝 Buyurtmani olish",
-                    callback_data=f"claim:{order_id}",
+                    url=url,
                 )
             ]
         ]
