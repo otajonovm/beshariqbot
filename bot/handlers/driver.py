@@ -196,9 +196,14 @@ async def _finish_driver_reg(
 
     links = await create_driver_invite_links(message.bot)
     kb = group_invite_kb(links)
+    registered_at = _fmt_until(driver.created_at or driver.trial_start)
     text = (
-        "✅ Ro'yxatdan o'tdingiz! 7 kunlik bepul sinov boshlandi.\n\n"
-        f"🚘 {driver.car_model} · {driver.car_number}\n\n"
+        "🎉 <b>Tabriklaymiz!</b>\n\n"
+        "Siz <b>Karvon Taxi</b> da haydovchi sifatida muvaffaqiyatli "
+        "ro'yxatdan o'tdingiz.\n\n"
+        f"🚘 {driver.car_model} · {driver.car_number}\n"
+        f"📅 Ro'yxatdan o'tgan vaqt: <b>{registered_at}</b>\n"
+        "⏱ 7 kunlik bepul sinov boshlandi.\n\n"
         f"⭐ Asosiy guruh: <b>{settings.primary_group_title}</b>\n"
         "Taksichilar shu yerga qo'shiladi, zakaslar avval shu guruhga tushadi:\n"
         f"{settings.primary_group_invite}"
@@ -206,14 +211,18 @@ async def _finish_driver_reg(
     await message.answer(text, reply_markup=kb)
     await message.answer("Asosiy menyu:", reply_markup=main_menu_kb())
 
+    uname = f"@{driver.username}" if driver.username else "—"
     try:
         await message.bot.send_message(
             settings.admin_id,
-            "🆕 Yangi haydovchi:\n"
-            f"ID: <code>{user.id}</code>\n"
-            f"Ism: {driver.full_name}\n"
-            f"Mashina: {driver.car_model} {driver.car_number}\n"
-            f"Tel: {driver.phone}",
+            "🆕 <b>Yangi haydovchi ro'yxatdan o'tdi</b>\n\n"
+            f"👤 Ism: <b>{driver.full_name}</b>\n"
+            f"🆔 Telegram ID: <code>{user.id}</code>\n"
+            f"🔗 Username: {uname}\n"
+            f"🚘 Mashina: {driver.car_model} · {driver.car_number}\n"
+            f"📞 Telefon: <code>{driver.phone}</code>\n"
+            f"📅 Ro'yxatdan o'tgan vaqt: <b>{registered_at}</b>\n"
+            f"⏱ Sinov: {driver.remaining_trial_days()} kun",
         )
     except TelegramForbiddenError:
         pass

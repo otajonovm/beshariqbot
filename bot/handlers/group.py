@@ -150,10 +150,6 @@ async def process_claim(
     """
     result, order = await claim_order(session, order_id, user.id)
 
-    if result == "not_driver":
-        return "Avval bot orqali haydovchi sifatida ro'yxatdan o'ting."
-    if result == "inactive":
-        return "Obuna yoki sinov muddatingiz tugagan. Admin bilan bog'laning."
     if result == "not_found":
         return "Buyurtma topilmadi."
     if result == "cooldown":
@@ -164,7 +160,7 @@ async def process_claim(
         return "Xatolik. Qayta urinib ko'ring."
 
     driver = await get_driver(session, user.id)
-    driver_name = driver.full_name if driver else user.full_name
+    driver_name = driver.full_name if driver else (user.full_name or "Haydovchi")
     await edit_group_card(bot, order, order.to_claimed_group_text(driver_name))
     await set_group_posts(session, order.id, order.posts_map())
     await session.commit()
