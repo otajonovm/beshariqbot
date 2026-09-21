@@ -49,6 +49,14 @@ class DbSessionMiddleware(BaseMiddleware):
 
 async def on_startup(bot: Bot, scheduler: AsyncIOScheduler) -> None:
     await init_db()
+    backend = "sqlite" if settings.is_sqlite else "postgresql"
+    if settings.is_sqlite:
+        logger.warning(
+            "Baza: SQLite (ephemeral). Heroku'da haydovchi ma'lumotlari dyno "
+            "qayta ishga tushganda yo'qoladi. DATABASE_URL (Postgres) ulang."
+        )
+    else:
+        logger.info("Baza: %s (doimiy)", backend)
     await bot.set_my_commands(
         [BotCommand(command="start", description="Bosh menyu")]
     )

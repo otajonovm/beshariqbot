@@ -309,11 +309,18 @@ class Order(Base):
         )
 
 
-engine: AsyncEngine = create_async_engine(
-    settings.database_url,
-    echo=False,
-    pool_pre_ping=True,
-)
+_db_url = settings.resolved_database_url()
+_engine_kwargs: dict[str, Any] = {"echo": False, "pool_pre_ping": True}
+if not settings.is_sqlite:
+    # Heroku Postgres: idle connectionlarni qayta ishlatish + SSL majburiy
+    _engine_kwargs.update(
+        pool_size=5,
+        max_overflow=10,
+        pool_recycle=1800,
+        connect_args={"ssl": True},
+    )
+
+engine: AsyncEngine = create_async_engine(_db_url, **_engine_kwargs)
 
 async_session_maker = async_sessionmaker(
     engine,
@@ -331,7 +338,8 @@ def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:  # type: i
     cursor.close()
 
 
-event.listen(engine.sync_engine, "connect", _set_sqlite_pragma)
+if settings.is_sqlite:
+    event.listen(engine.sync_engine, "connect", _set_sqlite_pragma)
 
 
 async def init_db() -> None:
@@ -343,7 +351,9 @@ async def init_db() -> None:
             if "group_posts" not in columns:
                 sync_conn.execute(text("ALTER TABLE orders ADD COLUMN group_posts JSON"))
 
-        await conn.run_sync(_add_group_posts)
+        # Eski SQLite deploylar uchun migratsiya; Postgresda create_all yetarli
+        if settings.is_sqlite:
+            await conn.run_sync(_add_group_posts)
 
 
 async def dispose_db() -> None:

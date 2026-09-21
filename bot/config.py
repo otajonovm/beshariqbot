@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     bot_username: str = Field(default="beshariq_toshkent_taxi_uzbot")
     admin_id: int = Field(..., description="Super-admin Telegram user ID")
     currency: str = Field(default="UZS")
+    # Heroku Postgres: heroku addons:create heroku-postgresql
+    # Agar bo'sh bo'lsa — lokal SQLite (faqat development uchun)
+    database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
 
     @field_validator("bot_token", mode="before")
     @classmethod
@@ -46,6 +49,28 @@ class Settings(BaseSettings):
     @classmethod
     def strip_ids(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            return value
+        url = value.strip()
+        # Heroku beradi: postgres://... — SQLAlchemy 2 async uchun asyncpg kerak
+        if url.startswith("postgres://"):
+            url = "postgresql://" + url[len("postgres://") :]
+        if url.startswith("postgresql://"):
+            url = "postgresql+asyncpg://" + url[len("postgresql://") :]
+        # asyncpg libpq'ning sslmode parametrini tushunmaydi — alohida beriladi
+        if "sslmode=" in url:
+            from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+            parsed = urlparse(url)
+            query = [(k, v) for k, v in parse_qsl(parsed.query) if k.lower() != "sslmode"]
+            url = urlunparse(parsed._replace(query=urlencode(query)))
+        return url
 
     @classmethod
     def settings_customise_sources(
@@ -75,11 +100,17 @@ class Settings(BaseSettings):
             ids.insert(0, primary)
         return ids
 
-    @property
-    def database_url(self) -> str:
+    def resolved_database_url(self) -> str:
+        """Heroku/Postgres DATABASE_URL yoki lokal SQLite."""
+        if self.database_url:
+            return self.database_url
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         db_path = (DATA_DIR / "bot.db").resolve().as_posix()
         return f"sqlite+aiosqlite:///{db_path}"
+
+    @property
+    def is_sqlite(self) -> bool:
+        return self.resolved_database_url().startswith("sqlite")
 
 
 @lru_cache(maxsize=1)
