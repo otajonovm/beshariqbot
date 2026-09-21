@@ -78,6 +78,7 @@ async def cmd_start(
     await session.commit()
 
     # Guruhdagi "Buyurtmani olish" → t.me/bot?start=claim_123
+    # Ro'yxatdan o'tish shart emas — guruh a'zosi to'g'ridan-to'g'ri olishi mumkin.
     payload = (command.args or "").strip()
     if payload.startswith("claim_"):
         try:
