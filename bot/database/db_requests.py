@@ -21,7 +21,7 @@ from bot.database.models import (
     utcnow,
 )
 
-ClaimResult = Literal["ok", "taken", "cooldown", "not_found", "inactive", "not_driver"]
+ClaimResult = Literal["ok", "taken", "cooldown", "not_found"]
 
 
 @dataclass(slots=True)
@@ -183,13 +183,8 @@ async def claim_order(
 
     SQLite WAL + bitta tranzaksiyadagi SELECT + shartli UPDATE
     ikki haydovchi bir vaqtda bosganda ikkinchisini rad etadi.
+    Ro'yxatdan o'tish shart emas — guruh a'zosi zakasni olishi mumkin.
     """
-    driver = await session.get(Driver, driver_id)
-    if driver is None:
-        return "not_driver", None
-    if not driver.is_access_valid():
-        return "inactive", None
-
     async with session.begin_nested():
         order = await session.get(Order, order_id, with_for_update=True)
         if order is None:

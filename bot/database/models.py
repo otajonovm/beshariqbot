@@ -133,8 +133,8 @@ class Driver(Base):
     )
 
     orders: Mapped[list[Order]] = relationship(
+        primaryjoin="Driver.telegram_id == foreign(Order.driver_id)",
         back_populates="driver",
-        foreign_keys="Order.driver_id",
     )
 
     def _aware(self, dt: datetime | None) -> datetime | None:
@@ -187,7 +187,7 @@ class Order(Base):
         BigInteger, ForeignKey("users.telegram_id"), index=True
     )
     driver_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("drivers.telegram_id"), nullable=True, index=True
+        BigInteger, nullable=True, index=True
     )
     direction: Mapped[str] = mapped_column(String(32))
     area: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -209,7 +209,10 @@ class Order(Base):
     )
 
     passenger: Mapped[User] = relationship(foreign_keys=[passenger_id], back_populates="orders")
-    driver: Mapped[Driver | None] = relationship(foreign_keys=[driver_id], back_populates="orders")
+    driver: Mapped[Driver | None] = relationship(
+        primaryjoin="foreign(Order.driver_id) == Driver.telegram_id",
+        back_populates="orders",
+    )
 
     def area_display(self) -> str:
         if self.area == "other" and self.area_custom:
@@ -338,12 +341,85 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-        def _add_group_posts(sync_conn) -> None:  # type: ignore[no-untyped-def]
+        def _migrate_orders(sync_conn) -> None:  # type: ignore[no-untyped-def]
             columns = [col["name"] for col in inspect(sync_conn).get_columns("orders")]
             if "group_posts" not in columns:
                 sync_conn.execute(text("ALTER TABLE orders ADD COLUMN group_posts JSON"))
 
-        await conn.run_sync(_add_group_posts)
+            # Eski SQLite: orders.driver_id → drivers FK ni olib tashlash
+            # (ro'yxatdan o'tmagan haydovchi ham zakas olishi uchun)
+            dialect = sync_conn.dialect.name
+            if dialect != "sqlite":
+                return
+            fks = sync_conn.execute(text("PRAGMA foreign_key_list(orders)")).fetchall()
+            has_driver_fk = any(row[2] == "drivers" for row in fks)
+            if not has_driver_fk:
+                return
+            sync_conn.execute(text("PRAGMA foreign_keys=OFF"))
+            sync_conn.execute(
+                text(
+                    """
+                    CREATE TABLE orders_new (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        order_type VARCHAR(16) NOT NULL,
+                        status VARCHAR(16) NOT NULL,
+                        passenger_id BIGINT NOT NULL,
+                        driver_id BIGINT,
+                        direction VARCHAR(32) NOT NULL,
+                        area VARCHAR(32),
+                        area_custom VARCHAR(128),
+                        seats VARCHAR(32),
+                        departure_time VARCHAR(64),
+                        cargo_description TEXT,
+                        photo_file_id VARCHAR(256),
+                        phone VARCHAR(32) NOT NULL,
+                        group_message_id INTEGER,
+                        group_posts JSON,
+                        rejected_drivers JSON NOT NULL,
+                        last_cancel_reason VARCHAR(64),
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        FOREIGN KEY(passenger_id) REFERENCES users (telegram_id)
+                    )
+                    """
+                )
+            )
+            sync_conn.execute(
+                text(
+                    """
+                    INSERT INTO orders_new (
+                        id, order_type, status, passenger_id, driver_id, direction,
+                        area, area_custom, seats, departure_time, cargo_description,
+                        photo_file_id, phone, group_message_id, group_posts,
+                        rejected_drivers, last_cancel_reason, created_at, updated_at
+                    )
+                    SELECT
+                        id, order_type, status, passenger_id, driver_id, direction,
+                        area, area_custom, seats, departure_time, cargo_description,
+                        photo_file_id, phone, group_message_id, group_posts,
+                        rejected_drivers, last_cancel_reason, created_at, updated_at
+                    FROM orders
+                    """
+                )
+            )
+            sync_conn.execute(text("DROP TABLE orders"))
+            sync_conn.execute(text("ALTER TABLE orders_new RENAME TO orders"))
+            sync_conn.execute(text("CREATE INDEX IF NOT EXISTS ix_orders_status ON orders (status)"))
+            sync_conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_orders_type_status "
+                    "ON orders (order_type, status)"
+                )
+            )
+            sync_conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_orders_passenger_id ON orders (passenger_id)")
+            )
+            sync_conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_orders_driver_id ON orders (driver_id)")
+            )
+            sync_conn.execute(text("PRAGMA foreign_keys=ON"))
+
+        await conn.run_sync(_migrate_orders)
 
 
 async def dispose_db() -> None:
