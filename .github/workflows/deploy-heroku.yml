@@ -1,0 +1,36 @@
+name: Deploy to Heroku
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.HEROKU_API_KEY != '' && secrets.HEROKU_EMAIL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Heroku CLI
+        run: curl -fsSL https://cli-assets.heroku.com/install.sh | sh
+
+      - name: Deploy main to Heroku
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+          HEROKU_EMAIL: ${{ secrets.HEROKU_EMAIL }}
+          HEROKU_APP: beshariqbot
+        run: |
+          cat > ~/.netrc <<EOF
+          machine api.heroku.com
+            login ${HEROKU_EMAIL}
+            password ${HEROKU_API_KEY}
+          machine git.heroku.com
+            login ${HEROKU_EMAIL}
+            password ${HEROKU_API_KEY}
+          EOF
+          chmod 600 ~/.netrc
+          heroku git:remote -a "$HEROKU_APP"
+          git push heroku HEAD:main --force
+          heroku ps:restart -a "$HEROKU_APP"
+          echo "Deployed $(git rev-parse --short HEAD) to $HEROKU_APP"
