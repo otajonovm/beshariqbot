@@ -25,7 +25,12 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    bot_token: str = Field(..., min_length=20, description="Telegram Bot API token")
+    # false = Telegram polling/xabarlar o'chirilgan (bot uzilgan)
+    bot_enabled: bool = Field(default=False, description="Telegram botni yoqish/o'chirish")
+    bot_token: str = Field(
+        default="",
+        description="Telegram Bot API token (bot_enabled=true bo'lsa majburiy)",
+    )
     supergroup_ids: str = Field(
         default=DEFAULT_GROUP_IDS,
         description="Haydovchilar guruhlari, vergul bilan",
@@ -34,7 +39,7 @@ class Settings(BaseSettings):
     primary_group_invite: str = Field(default=PRIMARY_GROUP_INVITE)
     primary_group_title: str = Field(default="426. Global")
     bot_username: str = Field(default="beshariq_toshkent_taxi_uzbot")
-    admin_id: int = Field(..., description="Super-admin Telegram user ID")
+    admin_id: int = Field(default=0, description="Super-admin Telegram user ID")
     currency: str = Field(default="UZS")
     # Heroku Postgres: heroku addons:create heroku-postgresql
     # Agar bo'sh bo'lsa — lokal SQLite (faqat development uchun)
@@ -44,6 +49,13 @@ class Settings(BaseSettings):
     @classmethod
     def strip_token(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("bot_enabled", mode="before")
+    @classmethod
+    def parse_enabled(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return value
 
     @field_validator("supergroup_ids", mode="before")
     @classmethod
