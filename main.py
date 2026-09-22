@@ -95,6 +95,22 @@ async def start_health_server() -> None:
     logger.info("Health server 0.0.0.0:%s", port)
 
 
+async def run_disconnected() -> None:
+    """Telegram o'chirilgan: faqat health server (xabar ketmaydi)."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    logger.warning(
+        "BOT_ENABLED=false — Telegram bot uzilgan. "
+        "Polling/scheduler ishlamaydi, hech kimga xabar ketmaydi. "
+        "Qayta yoqish: BOT_ENABLED=true"
+    )
+    await start_health_server()
+    # Dyno/jarayon tirik qolsin, lekin Telegramga ulanishmasin
+    await asyncio.Event().wait()
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -102,6 +118,15 @@ async def main() -> None:
     )
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     logging.getLogger("apscheduler").setLevel(logging.INFO)
+
+    if not settings.bot_enabled:
+        await run_disconnected()
+        return
+
+    if len(settings.bot_token) < 20:
+        raise SystemExit("BOT_ENABLED=true, lekin BOT_TOKEN yo'q yoki juda qisqa.")
+    if not settings.admin_id:
+        raise SystemExit("BOT_ENABLED=true, lekin ADMIN_ID=0. To'g'ri Telegram ID qo'ying.")
 
     bot = Bot(
         token=settings.bot_token,
