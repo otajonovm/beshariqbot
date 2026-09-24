@@ -40,7 +40,7 @@ def _fmt_stats(stats) -> str:
         f"👥 Foydalanuvchilar: <b>{stats.users}</b>\n"
         f"🚘 Haydovchilar: <b>{stats.drivers_total}</b>\n"
         f"   • Aktiv: {stats.drivers_active}\n"
-        f"   • Sinovda: {stats.drivers_trial}\n"
+        f"   • Obunali: {stats.drivers_paid}\n"
         f"   • Tugagan: {stats.drivers_expired}\n\n"
         f"📋 Buyurtmalar: <b>{stats.orders_total}</b>\n"
         f"   • Kutilmoqda: {stats.orders_pending}\n"
@@ -52,7 +52,7 @@ def _fmt_stats(stats) -> str:
 
 
 def _driver_line(driver) -> str:
-    paid = "💳" if driver.has_paid_subscription() else "⏱"
+    paid = "💳" if driver.has_paid_subscription() else "📌"
     status = driver.status
     until = ""
     if driver.subscription_until:

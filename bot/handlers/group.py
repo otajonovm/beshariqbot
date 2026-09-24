@@ -148,7 +148,13 @@ async def process_claim(
     """
     Buyurtmani qabul qilish. Natija matni foydalanuvchiga ko'rsatiladi.
     """
-    result, order = await claim_order(session, order_id, user.id)
+    result, order = await claim_order(
+        session,
+        order_id,
+        user.id,
+        full_name=user.full_name or "",
+        username=user.username,
+    )
 
     if result == "not_found":
         return "Buyurtma topilmadi."
@@ -160,7 +166,9 @@ async def process_claim(
         return "Xatolik. Qayta urinib ko'ring."
 
     driver = await get_driver(session, user.id)
-    driver_name = driver.full_name if driver else (user.full_name or "Haydovchi")
+    driver_name = (
+        driver.full_name if driver and driver.full_name else (user.full_name or "Haydovchi")
+    )
     await edit_group_card(bot, order, order.to_claimed_group_text(driver_name))
     await set_group_posts(session, order.id, order.posts_map())
     await session.commit()
@@ -195,7 +203,23 @@ async def process_claim(
         except TelegramForbiddenError:
             logger.info("Mijoz %s botni bloklagan", passenger.telegram_id)
 
+    await _maybe_remind_profile(bot, session, user.id)
     return f"✅ Buyurtma #{order.id} sizniki! Tafsilotlar yuqorida."
+
+
+async def _maybe_remind_profile(bot: Bot, session: AsyncSession, user_id: int) -> None:
+    driver = await get_driver(session, user_id)
+    if driver is None or driver.is_profile_complete():
+        return
+    try:
+        await bot.send_message(
+            user_id,
+            "ℹ️ Profilingiz hali to'liq emas.\n"
+            "Botda <b>🚘 Haydovchi sifatida ulanish</b> tugmasini bosib "
+            "ism, mashina va telefonni to'ldiring.",
+        )
+    except TelegramForbiddenError:
+        pass
 
 
 @router.callback_query(F.data.startswith("claim:"))

@@ -1,4 +1,4 @@
-"""Haydovchi ro'yxati, trial havola, kelishuv va bekor qilish."""
+"""Haydovchi profili, guruh havolasi, kelishuv va bekor qilish."""
 
 from __future__ import annotations
 
@@ -49,6 +49,17 @@ def _fmt_until(dt: datetime | None) -> str:
     return local.strftime("%d.%m.%Y %H:%M")
 
 
+async def _start_profile_fsm(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(DriverReg.name)
+    await message.answer(
+        "🚘 <b>Haydovchi profilini to'ldirish</b>\n\n"
+        "Birinchi marta taxi sifatida ulanish uchun profilingizni to'ldiring.\n\n"
+        "To'liq ismingizni yozing:",
+        reply_markup=cancel_kb(),
+    )
+
+
 @router.message(F.text == BTN_DRIVER)
 async def start_driver_reg(message: Message, state: FSMContext, session: AsyncSession) -> None:
     user = message.from_user
@@ -59,11 +70,14 @@ async def start_driver_reg(message: Message, state: FSMContext, session: AsyncSe
         if driver.status == DriverStatus.BANNED.value:
             await message.answer("Sizning profilingiz bloklangan. Admin bilan bog'laning.")
             return
+        if not driver.is_profile_complete():
+            await _start_profile_fsm(message, state)
+            return
         if driver.is_access_valid():
             extra = (
                 f"📅 Obuna: {_fmt_until(driver.subscription_until)}"
                 if driver.has_paid_subscription()
-                else f"⏱ Sinov: {driver.remaining_trial_days()} kun qoldi"
+                else "📌 Profil to'ldirilgan"
             )
             links = await create_driver_invite_links(message.bot)
             kb = group_invite_kb(links)
@@ -79,7 +93,7 @@ async def start_driver_reg(message: Message, state: FSMContext, session: AsyncSe
             await message.answer("Asosiy menyu:", reply_markup=main_menu_kb())
             return
         await message.answer(
-            "Sinov/obuna muddati tugagan. Qayta ulanish uchun admin oylik to'lovni tasdiqlashi kerak.\n"
+            "Obuna muddati tugagan. Qayta ulanish uchun admin oylik to'lovni tasdiqlashi kerak.\n"
             "Admin bilan bog'laning.",
             reply_markup=main_menu_kb(),
         )
@@ -95,14 +109,7 @@ async def start_driver_reg(message: Message, state: FSMContext, session: AsyncSe
             pass
         return
 
-    await state.clear()
-    await state.set_state(DriverReg.name)
-    await message.answer(
-        "🚘 <b>Haydovchi sifatida ulanish</b>\n\n"
-        "7 kun bepul sinov beriladi, so'ng oylik obuna.\n\n"
-        "To'liq ismingizni yozing:",
-        reply_markup=cancel_kb(),
-    )
+    await _start_profile_fsm(message, state)
 
 
 @router.message(DriverReg.name, F.text)
@@ -202,8 +209,7 @@ async def _finish_driver_reg(
         "Siz <b>Karvon Taxi</b> da haydovchi sifatida muvaffaqiyatli "
         "ro'yxatdan o'tdingiz.\n\n"
         f"🚘 {driver.car_model} · {driver.car_number}\n"
-        f"📅 Ro'yxatdan o'tgan vaqt: <b>{registered_at}</b>\n"
-        "⏱ 7 kunlik bepul sinov boshlandi.\n\n"
+        f"📅 Ro'yxatdan o'tgan vaqt: <b>{registered_at}</b>\n\n"
         f"⭐ Asosiy guruh: <b>{settings.primary_group_title}</b>\n"
         "Taksichilar shu yerga qo'shiladi, zakaslar avval shu guruhga tushadi:\n"
         f"{settings.primary_group_invite}"

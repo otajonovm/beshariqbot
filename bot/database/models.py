@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -81,9 +81,7 @@ CANCEL_REASON_LABELS: dict[str, str] = {
     "phone": "📵 Telefon ko'tarmadi",
 }
 
-TRIAL_DAYS = 7
-TRIAL_REMINDER_DAY = 5
-TRIAL_KICK_DAY = 8
+_PROFILE_PLACEHOLDERS = {"", "—", "-", "n/a", "N/A"}
 
 
 class Base(DeclarativeBase):
@@ -110,7 +108,7 @@ class User(Base):
 
 
 class Driver(Base):
-    """Haydovchi profili, 7 kunlik trial va oylik obuna."""
+    """Haydovchi profili va (ixtiyoriy) oylik obuna."""
 
     __tablename__ = "drivers"
 
@@ -149,26 +147,31 @@ class Driver(Base):
         until = self._aware(self.subscription_until)
         return until is not None and until > now
 
-    def trial_elapsed(self, now: datetime | None = None) -> timedelta:
-        now = now or utcnow()
-        start = self._aware(self.trial_start) or now
-        return now - start
+    def is_profile_complete(self) -> bool:
+        """Mashina va telefon to'ldirilganmi (guruh claim stub emas)."""
+        return (
+            len((self.full_name or "").strip()) >= 3
+            and (self.car_model or "").strip() not in _PROFILE_PLACEHOLDERS
+            and (self.car_number or "").strip() not in _PROFILE_PLACEHOLDERS
+            and (self.phone or "").strip() not in _PROFILE_PLACEHOLDERS
+        )
 
     def is_access_valid(self, now: datetime | None = None) -> bool:
-        """Guruh va buyurtma olish huquqi (trial yoki to'langan obuna)."""
+        """Buyurtma olish huquqi: bloklanmagan; muddati o'tgan to'langan obuna bo'lmasin."""
         now = now or utcnow()
         if self.status == DriverStatus.BANNED.value:
             return False
         if self.has_paid_subscription(now):
             return True
-        if self.status != DriverStatus.ACTIVE.value:
+        # Avval to'langan obuna muddati tugagan
+        until = self._aware(self.subscription_until)
+        if until is not None and until <= now:
             return False
-        # 8-kungacha (kick oldidan) buyurtma olish huquqi saqlanadi
-        return self.trial_elapsed(now) < timedelta(days=TRIAL_KICK_DAY)
-
-    def remaining_trial_days(self, now: datetime | None = None) -> int:
-        left = timedelta(days=TRIAL_DAYS) - self.trial_elapsed(now)
-        return max(0, left.days)
+        # Sinov yo'q: aktiv yoki eski trial-expired (obunasiz) — ruxsat
+        return self.status in {
+            DriverStatus.ACTIVE.value,
+            DriverStatus.EXPIRED.value,
+        }
 
 
 class Order(Base):

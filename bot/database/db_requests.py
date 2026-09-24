@@ -29,7 +29,7 @@ class Stats:
     users: int
     drivers_total: int
     drivers_active: int
-    drivers_trial: int
+    drivers_paid: int
     drivers_expired: int
     orders_total: int
     orders_pending: int
@@ -89,12 +89,9 @@ async def create_driver(
         existing.car_model = car_model
         existing.car_number = car_number
         existing.phone = phone
-        if existing.status == DriverStatus.BANNED.value:
-            await session.flush()
-            return existing
-        if not existing.is_access_valid() and not existing.has_paid_subscription():
-            await session.flush()
-            return existing
+        if existing.status != DriverStatus.BANNED.value:
+            existing.status = DriverStatus.ACTIVE.value
+            existing.kicked_at = None
         await session.flush()
         return existing
 
@@ -107,8 +104,49 @@ async def create_driver(
         phone=phone,
         trial_start=utcnow(),
         status=DriverStatus.ACTIVE.value,
-        notified_day5=False,
-        notified_day7=False,
+        notified_day5=True,
+        notified_day7=True,
+    )
+    session.add(driver)
+    await session.flush()
+    return driver
+
+
+async def ensure_driver_stub(
+    session: AsyncSession,
+    *,
+    telegram_id: int,
+    full_name: str,
+    username: str | None,
+) -> Driver:
+    """Guruhdan claim uchun minimal haydovchi yozuvi (profil keyin to'ldiriladi)."""
+    existing = await session.get(Driver, telegram_id)
+    if existing is not None:
+        if full_name and (not existing.full_name or existing.full_name == "Haydovchi"):
+            existing.full_name = full_name
+        if username:
+            existing.username = username
+        # Eski sinovdan qolgan EXPIRED (obunasiz) — qayta aktiv
+        if (
+            existing.status == DriverStatus.EXPIRED.value
+            and existing.subscription_until is None
+        ):
+            existing.status = DriverStatus.ACTIVE.value
+            existing.kicked_at = None
+        await session.flush()
+        return existing
+
+    driver = Driver(
+        telegram_id=telegram_id,
+        full_name=full_name or "Haydovchi",
+        username=username,
+        car_model="—",
+        car_number="—",
+        phone="—",
+        trial_start=utcnow(),
+        status=DriverStatus.ACTIVE.value,
+        notified_day5=True,
+        notified_day7=True,
     )
     session.add(driver)
     await session.flush()
@@ -177,14 +215,23 @@ async def claim_order(
     session: AsyncSession,
     order_id: int,
     driver_id: int,
+    *,
+    full_name: str = "",
+    username: str | None = None,
 ) -> tuple[ClaimResult, Order | None]:
     """
     Birinchi bosgan haydovchi yutadi.
 
-    SQLite WAL + bitta tranzaksiyadagi SELECT + shartli UPDATE
-    ikki haydovchi bir vaqtda bosganda ikkinchisini rad etadi.
     Ro'yxatdan o'tish shart emas — guruh a'zosi zakasni olishi mumkin.
+    SELECT FOR UPDATE ikki haydovchini ajratadi.
     """
+    await ensure_driver_stub(
+        session,
+        telegram_id=driver_id,
+        full_name=full_name,
+        username=username,
+    )
+
     async with session.begin_nested():
         order = await session.get(Order, order_id, with_for_update=True)
         if order is None:
@@ -321,7 +368,8 @@ async def mark_driver_expired(session: AsyncSession, driver_id: int) -> None:
     await session.commit()
 
 
-async def list_trial_drivers(session: AsyncSession) -> list[Driver]:
+async def list_subscription_drivers(session: AsyncSession) -> list[Driver]:
+    """Obuna muddati tekshiriladigan haydovchilar (bloklanmaganlar)."""
     stmt = select(Driver).where(Driver.status != DriverStatus.BANNED.value)
     return list((await session.execute(stmt)).scalars().all())
 
@@ -337,11 +385,7 @@ async def get_stats(session: AsyncSession) -> Stats:
     drivers = list((await session.execute(select(Driver))).scalars().all())
     active = sum(1 for d in drivers if d.is_access_valid(now))
     expired = sum(1 for d in drivers if d.status == DriverStatus.EXPIRED.value)
-    trial = sum(
-        1
-        for d in drivers
-        if d.status == DriverStatus.ACTIVE.value and not d.has_paid_subscription(now)
-    )
+    paid = sum(1 for d in drivers if d.has_paid_subscription(now))
 
     async def _count(*where: Any) -> int:
         stmt = select(func.count(Order.id))
@@ -353,7 +397,7 @@ async def get_stats(session: AsyncSession) -> Stats:
         users=int(users),
         drivers_total=len(drivers),
         drivers_active=active,
-        drivers_trial=trial,
+        drivers_paid=paid,
         drivers_expired=expired,
         orders_total=await _count(),
         orders_pending=await _count(Order.status == OrderStatus.PENDING.value),
