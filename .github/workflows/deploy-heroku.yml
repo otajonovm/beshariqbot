@@ -31,6 +31,20 @@ jobs:
           EOF
           chmod 600 ~/.netrc
           heroku git:remote -a "$HEROKU_APP"
+
+          # SQLite Heroku'da bazani har kuni o'chiradi — Postgres majburiy
+          if ! heroku config:get DATABASE_URL -a "$HEROKU_APP" | grep -q .; then
+            echo "DATABASE_URL yo'q. Postgres qo'shilmoqda..."
+            heroku addons:create heroku-postgresql:essential-0 -a "$HEROKU_APP" || true
+            sleep 15
+          fi
+          if ! heroku config:get DATABASE_URL -a "$HEROKU_APP" | grep -q .; then
+            echo "::error::DATABASE_URL still missing. Attach Postgres manually:"
+            echo "heroku addons:create heroku-postgresql:essential-0 -a $HEROKU_APP"
+            exit 1
+          fi
+
           git push heroku HEAD:main --force
           heroku ps:restart -a "$HEROKU_APP"
           echo "Deployed $(git rev-parse --short HEAD) to $HEROKU_APP"
+          echo "DATABASE_URL is set — data will persist across restarts."

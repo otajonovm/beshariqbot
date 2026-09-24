@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+import os
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
@@ -111,6 +112,11 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.resolved_database_url().startswith("sqlite")
+
+    @property
+    def is_heroku(self) -> bool:
+        """Heroku dyno muhiti (filesystem ephemeral)."""
+        return bool(os.environ.get("DYNO"))
 
 
 @lru_cache(maxsize=1)

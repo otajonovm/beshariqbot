@@ -112,47 +112,6 @@ async def create_driver(
     return driver
 
 
-async def ensure_driver_stub(
-    session: AsyncSession,
-    *,
-    telegram_id: int,
-    full_name: str,
-    username: str | None,
-) -> Driver:
-    """Guruhdan claim uchun minimal haydovchi yozuvi (profil keyin to'ldiriladi)."""
-    existing = await session.get(Driver, telegram_id)
-    if existing is not None:
-        if full_name and (not existing.full_name or existing.full_name == "Haydovchi"):
-            existing.full_name = full_name
-        if username:
-            existing.username = username
-        # Eski sinovdan qolgan EXPIRED (obunasiz) — qayta aktiv
-        if (
-            existing.status == DriverStatus.EXPIRED.value
-            and existing.subscription_until is None
-        ):
-            existing.status = DriverStatus.ACTIVE.value
-            existing.kicked_at = None
-        await session.flush()
-        return existing
-
-    driver = Driver(
-        telegram_id=telegram_id,
-        full_name=full_name or "Haydovchi",
-        username=username,
-        car_model="—",
-        car_number="—",
-        phone="—",
-        trial_start=utcnow(),
-        status=DriverStatus.ACTIVE.value,
-        notified_day5=True,
-        notified_day7=True,
-    )
-    session.add(driver)
-    await session.flush()
-    return driver
-
-
 async def create_order(
     session: AsyncSession,
     *,
@@ -222,15 +181,10 @@ async def claim_order(
     """
     Birinchi bosgan haydovchi yutadi.
 
-    Ro'yxatdan o'tish shart emas — guruh a'zosi zakasni olishi mumkin.
+    Ro'yxatdan o'tish shart emas — drivers jadvaliga yozilmaydi.
     SELECT FOR UPDATE ikki haydovchini ajratadi.
     """
-    await ensure_driver_stub(
-        session,
-        telegram_id=driver_id,
-        full_name=full_name,
-        username=username,
-    )
+    del full_name, username  # API mosligi uchun qoldirilgan
 
     async with session.begin_nested():
         order = await session.get(Order, order_id, with_for_update=True)
@@ -375,14 +329,21 @@ async def list_subscription_drivers(session: AsyncSession) -> list[Driver]:
 
 
 async def list_drivers(session: AsyncSession, limit: int = 30) -> list[Driver]:
-    stmt = select(Driver).order_by(Driver.created_at.desc()).limit(limit)
-    return list((await session.execute(stmt)).scalars().all())
+    """Faqat profil to'ldirgan haydovchilar (claim stublari emas)."""
+    stmt = select(Driver).order_by(Driver.created_at.desc()).limit(limit * 3)
+    all_rows = list((await session.execute(stmt)).scalars().all())
+    complete = [d for d in all_rows if d.is_profile_complete()]
+    return complete[:limit]
 
 
 async def get_stats(session: AsyncSession) -> Stats:
     now = utcnow()
     users = (await session.execute(select(func.count(User.telegram_id)))).scalar_one()
-    drivers = list((await session.execute(select(Driver))).scalars().all())
+    drivers = [
+        d
+        for d in (await session.execute(select(Driver))).scalars().all()
+        if d.is_profile_complete()
+    ]
     active = sum(1 for d in drivers if d.is_access_valid(now))
     expired = sum(1 for d in drivers if d.status == DriverStatus.EXPIRED.value)
     paid = sum(1 for d in drivers if d.has_paid_subscription(now))

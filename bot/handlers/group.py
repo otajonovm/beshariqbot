@@ -209,7 +209,7 @@ async def process_claim(
 
 async def _maybe_remind_profile(bot: Bot, session: AsyncSession, user_id: int) -> None:
     driver = await get_driver(session, user_id)
-    if driver is None or driver.is_profile_complete():
+    if driver is not None and driver.is_profile_complete():
         return
     try:
         await bot.send_message(

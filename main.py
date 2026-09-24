@@ -48,15 +48,26 @@ class DbSessionMiddleware(BaseMiddleware):
 
 
 async def on_startup(bot: Bot, scheduler: AsyncIOScheduler) -> None:
+    if settings.is_heroku and settings.is_sqlite:
+        msg = (
+            "Heroku'da SQLite ishlatilmoqda — baza har dyno restartida o'chadi "
+            "(haydovchi/foydalanuvchi soni 'nolga' qaytadi).\n"
+            "Yechim: heroku addons:create heroku-postgresql:essential-0 -a beshariqbot"
+        )
+        logger.error(msg)
+        try:
+            await bot.send_message(settings.admin_id, f"⛔ Bot ishga tushmadi.\n{msg}")
+        except Exception:
+            pass
+        raise SystemExit(1)
+
     await init_db()
-    backend = "sqlite" if settings.is_sqlite else "postgresql"
     if settings.is_sqlite:
         logger.warning(
-            "Baza: SQLite (ephemeral). Heroku'da haydovchi ma'lumotlari dyno "
-            "qayta ishga tushganda yo'qoladi. DATABASE_URL (Postgres) ulang."
+            "Baza: SQLite (faqat lokal). Production uchun DATABASE_URL (Postgres) kerak."
         )
     else:
-        logger.info("Baza: %s (doimiy)", backend)
+        logger.info("Baza: postgresql (doimiy saqlash)")
     await bot.set_my_commands(
         [BotCommand(command="start", description="Bosh menyu")]
     )
