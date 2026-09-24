@@ -106,6 +106,9 @@ async def create_driver(
         status=DriverStatus.ACTIVE.value,
         notified_day5=True,
         notified_day7=True,
+        notified_sub_10=False,
+        notified_sub_5=False,
+        notified_sub_1=False,
     )
     session.add(driver)
     await session.flush()
@@ -298,11 +301,29 @@ async def extend_subscription(
     driver.kicked_at = None
     driver.notified_day5 = True
     driver.notified_day7 = True
+    # Yangi muddat — eslatmalar qayta yuboriladi
+    driver.notified_sub_10 = False
+    driver.notified_sub_5 = False
+    driver.notified_sub_1 = False
     await session.commit()
     return driver
 
 
+async def mark_sub_notified(session: AsyncSession, driver_id: int, days: int) -> None:
+    values: dict[str, Any] = {}
+    if days == 10:
+        values["notified_sub_10"] = True
+    elif days == 5:
+        values["notified_sub_5"] = True
+    elif days == 1:
+        values["notified_sub_1"] = True
+    if values:
+        await session.execute(update(Driver).where(Driver.telegram_id == driver_id).values(**values))
+        await session.commit()
+
+
 async def mark_driver_notified(session: AsyncSession, driver_id: int, day: int) -> None:
+    """Eski trial flaglari (moslik)."""
     values: dict[str, Any] = {}
     if day == 5:
         values["notified_day5"] = True

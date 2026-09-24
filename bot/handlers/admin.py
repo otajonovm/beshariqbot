@@ -27,15 +27,23 @@ router = Router(name="admin")
 class IsAdmin(BaseFilter):
     async def __call__(self, event: TelegramObject) -> bool:
         user = getattr(event, "from_user", None)
-        return bool(user and user.id == settings.admin_id)
+        return bool(user and settings.is_admin(user.id))
 
 
 router.message.filter(F.chat.type == "private", IsAdmin())
 router.callback_query.filter(F.message.chat.type == "private", IsAdmin())
 
 
-def _fmt_stats(stats) -> str:
-    return (
+def _fmt_dt(dt) -> str:
+    if dt is None:
+        return "—"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().strftime("%d.%m.%Y %H:%M")
+
+
+def _fmt_stats(stats, recent_drivers=None) -> str:
+    text = (
         "📊 <b>Karvon Taxi statistikasi</b>\n\n"
         f"👥 Foydalanuvchilar: <b>{stats.users}</b>\n"
         f"🚘 Haydovchilar: <b>{stats.drivers_total}</b>\n"
@@ -49,6 +57,15 @@ def _fmt_stats(stats) -> str:
         f"   🚖 Taksi: {stats.orders_taxi}\n"
         f"   📦 Pochta: {stats.orders_parcel}"
     )
+    if recent_drivers:
+        lines = ["\n\n🆕 <b>So'nggi taksi bo'lib qo'shilganlar</b>"]
+        for d in recent_drivers[:10]:
+            lines.append(
+                f"• {_fmt_dt(d.created_at)} — <b>{d.full_name}</b>\n"
+                f"  <code>{d.telegram_id}</code> · {d.car_model} {d.car_number}"
+            )
+        text += "\n".join(lines)
+    return text
 
 
 def _driver_line(driver) -> str:
@@ -56,13 +73,13 @@ def _driver_line(driver) -> str:
     status = driver.status
     until = ""
     if driver.subscription_until:
-        dt = driver.subscription_until
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        until = f" · {dt.astimezone().strftime('%d.%m.%Y')}"
+        until = f" · obuna: {_fmt_dt(driver.subscription_until)}"
+    left = driver.subscription_days_left()
+    left_s = f" · {left} kun qoldi" if left is not None else ""
     return (
         f"{paid} <code>{driver.telegram_id}</code> {driver.full_name}\n"
-        f"   {driver.car_model} {driver.car_number} · {status}{until}"
+        f"   {driver.car_model} {driver.car_number} · {status}{until}{left_s}\n"
+        f"   📅 Qo'shilgan: {_fmt_dt(driver.created_at)}"
     )
 
 
@@ -75,7 +92,8 @@ async def admin_panel(message: Message, state: FSMContext) -> None:
 @router.message(Command("stats"))
 async def cmd_stats(message: Message, session: AsyncSession) -> None:
     stats = await get_stats(session)
-    await message.answer(_fmt_stats(stats))
+    recent = await list_drivers(session, limit=10)
+    await message.answer(_fmt_stats(stats, recent))
 
 
 @router.message(Command("drivers"))
@@ -84,7 +102,7 @@ async def cmd_drivers(message: Message, session: AsyncSession) -> None:
     if not drivers:
         await message.answer("Haydovchilar yo'q.")
         return
-    text = "🚘 <b>Haydovchilar</b>\n\n" + "\n".join(_driver_line(d) for d in drivers)
+    text = "🚘 <b>Haydovchilar</b> (vaqt bilan)\n\n" + "\n".join(_driver_line(d) for d in drivers)
     await message.answer(text[:4000])
 
 
@@ -161,7 +179,8 @@ async def cb_groups(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "admin:stats")
 async def cb_stats(callback: CallbackQuery, session: AsyncSession) -> None:
     stats = await get_stats(session)
-    await callback.message.answer(_fmt_stats(stats))
+    recent = await list_drivers(session, limit=10)
+    await callback.message.answer(_fmt_stats(stats, recent))
     await callback.answer()
 
 
@@ -173,7 +192,8 @@ async def cb_drivers(callback: CallbackQuery, session: AsyncSession) -> None:
         await callback.answer()
         return
     await callback.message.answer(
-        "🚘 <b>Haydovchilar</b>\n\n" + "\n".join(_driver_line(d) for d in drivers[:40])
+        "🚘 <b>Haydovchilar</b> (vaqt bilan)\n\n"
+        + "\n".join(_driver_line(d) for d in drivers[:40])
     )
     await callback.answer()
 

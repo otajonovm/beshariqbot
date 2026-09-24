@@ -125,6 +125,10 @@ class Driver(Base):
     status: Mapped[str] = mapped_column(String(32), default=DriverStatus.ACTIVE.value)
     notified_day5: Mapped[bool] = mapped_column(Boolean, default=False)
     notified_day7: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Obuna tugashiga 10 / 5 / 1 kun qolganda eslatma
+    notified_sub_10: Mapped[bool] = mapped_column(Boolean, default=False)
+    notified_sub_5: Mapped[bool] = mapped_column(Boolean, default=False)
+    notified_sub_1: Mapped[bool] = mapped_column(Boolean, default=False)
     kicked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now()
@@ -155,6 +159,14 @@ class Driver(Base):
             and (self.car_number or "").strip() not in _PROFILE_PLACEHOLDERS
             and (self.phone or "").strip() not in _PROFILE_PLACEHOLDERS
         )
+
+    def subscription_days_left(self, now: datetime | None = None) -> int | None:
+        """Obuna tugashiga qolgan to'liq kunlar; obuna yo'q bo'lsa None."""
+        now = now or utcnow()
+        until = self._aware(self.subscription_until)
+        if until is None or until <= now:
+            return None
+        return max(0, (until - now).days)
 
     def is_access_valid(self, now: datetime | None = None) -> bool:
         """Buyurtma olish huquqi: bloklanmagan; muddati o'tgan to'langan obuna bo'lmasin."""
@@ -352,14 +364,25 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-        def _migrate_orders(sync_conn) -> None:  # type: ignore[no-untyped-def]
-            columns = [col["name"] for col in inspect(sync_conn).get_columns("orders")]
-            if "group_posts" not in columns:
+        def _migrate_schema(sync_conn) -> None:  # type: ignore[no-untyped-def]
+            # Drivers: obuna eslatma ustunlari
+            driver_cols = {col["name"] for col in inspect(sync_conn).get_columns("drivers")}
+            dialect = sync_conn.dialect.name
+            bool_default = "FALSE" if dialect == "postgresql" else "0"
+            for col_name in ("notified_sub_10", "notified_sub_5", "notified_sub_1"):
+                if col_name not in driver_cols:
+                    sync_conn.execute(
+                        text(
+                            f"ALTER TABLE drivers ADD COLUMN {col_name} "
+                            f"BOOLEAN DEFAULT {bool_default}"
+                        )
+                    )
+
+            order_cols = {col["name"] for col in inspect(sync_conn).get_columns("orders")}
+            if "group_posts" not in order_cols:
                 sync_conn.execute(text("ALTER TABLE orders ADD COLUMN group_posts JSON"))
 
             # Eski SQLite: orders.driver_id → drivers FK ni olib tashlash
-            # (ro'yxatdan o'tmagan haydovchi ham zakas olishi uchun)
-            dialect = sync_conn.dialect.name
             if dialect != "sqlite":
                 return
             fks = sync_conn.execute(text("PRAGMA foreign_key_list(orders)")).fetchall()
@@ -430,7 +453,7 @@ async def init_db() -> None:
             )
             sync_conn.execute(text("PRAGMA foreign_keys=ON"))
 
-        await conn.run_sync(_migrate_orders)
+        await conn.run_sync(_migrate_schema)
 
 
 async def dispose_db() -> None:

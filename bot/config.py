@@ -35,7 +35,13 @@ class Settings(BaseSettings):
     primary_group_invite: str = Field(default=PRIMARY_GROUP_INVITE)
     primary_group_title: str = Field(default="426. Global")
     bot_username: str = Field(default="beshariq_toshkent_taxi_uzbot")
-    admin_id: int = Field(..., description="Super-admin Telegram user ID")
+    admin_id: int = Field(..., description="Asosiy super-admin Telegram user ID")
+    # Qo'shimcha adminlar (vergul bilan). 5265031638 — to'liq huquqli admin.
+    admin_ids_extra: str = Field(
+        default="5265031638",
+        validation_alias="ADMIN_IDS",
+        description="Qo'shimcha admin Telegram ID lari",
+    )
     currency: str = Field(default="UZS")
     # Heroku Postgres: heroku addons:create heroku-postgresql
     # Agar bo'sh bo'lsa — lokal SQLite (faqat development uchun)
@@ -100,6 +106,25 @@ class Settings(BaseSettings):
         elif primary:
             ids.insert(0, primary)
         return ids
+
+    @property
+    def admin_ids(self) -> list[int]:
+        """Barcha adminlar: asosiy + ADMIN_IDS (to'liq huquq)."""
+        ids: list[int] = [self.admin_id]
+        for part in self.admin_ids_extra.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                value = int(part)
+            except ValueError:
+                continue
+            if value not in ids:
+                ids.append(value)
+        return ids
+
+    def is_admin(self, user_id: int | None) -> bool:
+        return bool(user_id and user_id in self.admin_ids)
 
     def resolved_database_url(self) -> str:
         """Heroku/Postgres DATABASE_URL yoki lokal SQLite."""

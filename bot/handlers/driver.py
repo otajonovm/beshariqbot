@@ -30,6 +30,7 @@ from bot.keyboards.default_kb import (
     main_menu_kb,
 )
 from bot.keyboards.inline_kb import cancel_reason_kb, claim_kb, group_invite_kb
+from bot.services.notify import notify_admins
 from bot.states.order_states import DriverReg
 
 logger = logging.getLogger(__name__)
@@ -97,16 +98,13 @@ async def start_driver_reg(message: Message, state: FSMContext, session: AsyncSe
             "Admin bilan bog'laning.",
             reply_markup=main_menu_kb(),
         )
-        try:
-            await message.bot.send_message(
-                settings.admin_id,
-                f"💳 Haydovchi qayta ulanmoqchi:\n"
-                f"ID: <code>{user.id}</code>\n"
-                f"Ism: {driver.full_name}\n"
-                f"Mashina: {driver.car_model} {driver.car_number}",
-            )
-        except TelegramForbiddenError:
-            pass
+        await notify_admins(
+            message.bot,
+            f"💳 Haydovchi qayta ulanmoqchi:\n"
+            f"ID: <code>{user.id}</code>\n"
+            f"Ism: {driver.full_name}\n"
+            f"Mashina: {driver.car_model} {driver.car_number}",
+        )
         return
 
     await _start_profile_fsm(message, state)
@@ -218,20 +216,16 @@ async def _finish_driver_reg(
     await message.answer("Asosiy menyu:", reply_markup=main_menu_kb())
 
     uname = f"@{driver.username}" if driver.username else "—"
-    try:
-        await message.bot.send_message(
-            settings.admin_id,
-            "🆕 <b>Yangi haydovchi ro'yxatdan o'tdi</b>\n\n"
-            f"👤 Ism: <b>{driver.full_name}</b>\n"
-            f"🆔 Telegram ID: <code>{user.id}</code>\n"
-            f"🔗 Username: {uname}\n"
-            f"🚘 Mashina: {driver.car_model} · {driver.car_number}\n"
-            f"📞 Telefon: <code>{driver.phone}</code>\n"
-            f"📅 Ro'yxatdan o'tgan vaqt: <b>{registered_at}</b>\n"
-            f"⏱ Sinov: {driver.remaining_trial_days()} kun",
-        )
-    except TelegramForbiddenError:
-        pass
+    await notify_admins(
+        message.bot,
+        "🆕 <b>Yangi haydovchi (taksi) ro'yxatdan o'tdi</b>\n\n"
+        f"👤 Ism: <b>{driver.full_name}</b>\n"
+        f"🆔 Telegram ID: <code>{user.id}</code>\n"
+        f"🔗 Username: {uname}\n"
+        f"🚘 Mashina: {driver.car_model} · {driver.car_number}\n"
+        f"📞 Telefon: <code>{driver.phone}</code>\n"
+        f"📅 Vaqt: <b>{registered_at}</b>",
+    )
 
 
 @router.callback_query(F.data.startswith("deal_ok:"))

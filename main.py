@@ -56,7 +56,9 @@ async def on_startup(bot: Bot, scheduler: AsyncIOScheduler) -> None:
         )
         logger.error(msg)
         try:
-            await bot.send_message(settings.admin_id, f"⛔ Bot ishga tushmadi.\n{msg}")
+            from bot.services.notify import notify_admins
+
+            await notify_admins(bot, f"⛔ Bot ishga tushmadi.\n{msg}")
         except Exception:
             pass
         raise SystemExit(1)

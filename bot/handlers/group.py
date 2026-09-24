@@ -18,6 +18,7 @@ from bot.database.db_requests import (
 )
 from bot.database.models import Order
 from bot.keyboards.inline_kb import claim_kb, deal_kb
+from bot.services.notify import notify_admins
 
 logger = logging.getLogger(__name__)
 router = Router(name="group")
@@ -41,15 +42,12 @@ async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
     known = event.chat.id in settings.group_ids
     status = "ulangan" if known else "noma'lum guruh (sozlamada yo'q)"
     logger.info("Bot guruhga qo'shildi: %s %s (%s)", event.chat.id, event.chat.title, status)
-    try:
-        await event.bot.send_message(
-            settings.admin_id,
-            f"Bot guruhga qo'shildi: <b>{event.chat.title or 'guruh'}</b>\n"
-            f"ID: <code>{event.chat.id}</code>\n"
-            f"{'✅ Sozlamada bor' if known else '⚠️ SUPERGROUP_IDS ga qo\'shilmagan'}",
-        )
-    except TelegramForbiddenError:
-        pass
+    await notify_admins(
+        event.bot,
+        f"Bot guruhga qo'shildi: <b>{event.chat.title or 'guruh'}</b>\n"
+        f"ID: <code>{event.chat.id}</code>\n"
+        f"{'✅ Sozlamada bor' if known else '⚠️ SUPERGROUP_IDS ga qo\'shilmagan'}",
+    )
 
 
 async def _send_card(
@@ -93,14 +91,11 @@ async def publish_order_to_group(bot: Bot, session: AsyncSession, order: Order) 
         await set_group_posts(session, order.id, posts)
         await session.commit()
     if errors:
-        try:
-            await bot.send_message(
-                settings.admin_id,
-                f"⚠️ Buyurtma #{order.id} ba'zi guruhlarga yuborilmadi:\n"
-                + "\n".join(f"<code>{item}</code>" for item in errors),
-            )
-        except TelegramForbiddenError:
-            pass
+        await notify_admins(
+            bot,
+            f"⚠️ Buyurtma #{order.id} ba'zi guruhlarga yuborilmadi:\n"
+            + "\n".join(f"<code>{item}</code>" for item in errors),
+        )
     return bool(posts)
 
 
