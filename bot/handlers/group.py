@@ -1,4 +1,4 @@
-"""Guruhdagi buyurtma kartochkasi va race-condition himoyalangan claim."""
+"""Guruhdagi buyurtma kartochkasi, claim va guruh reytingi."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import logging
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.filters import Command
 from aiogram.types import CallbackQuery, ChatMemberUpdated, InlineKeyboardMarkup, Message, User
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -220,6 +221,24 @@ async def _maybe_remind_profile(bot: Bot, session: AsyncSession, user_id: int) -
         )
     except TelegramForbiddenError:
         pass
+
+
+@router.message(Command("top", "reyting", "leaderboard"))
+async def cmd_group_top(message: Message, session: AsyncSession) -> None:
+    """Guruhda kim peshqadamligini bilish: /top, /top hafta, /top oy."""
+    from bot.services.leaderboard import get_leaderboard_text_by_type
+
+    parts = (message.text or "").split()[1:]
+    p_type = "daily"
+    if parts:
+        arg = parts[0].lower()
+        if "hafta" in arg or "week" in arg:
+            p_type = "weekly"
+        elif "oy" in arg or "month" in arg:
+            p_type = "monthly"
+
+    text = await get_leaderboard_text_by_type(session, p_type)
+    await message.answer(text, disable_web_page_preview=True)
 
 
 @router.callback_query(F.data.startswith("claim:"))

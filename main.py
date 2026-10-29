@@ -71,7 +71,10 @@ async def on_startup(bot: Bot, scheduler: AsyncIOScheduler) -> None:
     else:
         logger.info("Baza: postgresql (doimiy saqlash)")
     await bot.set_my_commands(
-        [BotCommand(command="start", description="Bosh menyu")]
+        [
+            BotCommand(command="start", description="Bosh menyu"),
+            BotCommand(command="top", description="Haydovchilar reytingi"),
+        ]
     )
     scheduler.start()
     logger.info("Scheduler ishga tushdi, baza tayyor.")

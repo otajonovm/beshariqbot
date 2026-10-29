@@ -103,8 +103,33 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Statistika", callback_data="admin:stats")],
+            [InlineKeyboardButton(text="🏆 Reyting (Gemifikatsiya)", callback_data="admin:lb_menu")],
             [InlineKeyboardButton(text="👥 Guruhlar holati", callback_data="admin:groups")],
             [InlineKeyboardButton(text="🚘 Haydovchilar", callback_data="admin:drivers")],
             [InlineKeyboardButton(text="➕ Obunani uzaytirish", callback_data="admin:extend")],
+        ]
+    )
+
+
+def admin_leaderboard_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📅 Bugungi kunlik", callback_data="admin:lb:daily"),
+                InlineKeyboardButton(text="🌟 Haftalik", callback_data="admin:lb:weekly"),
+                InlineKeyboardButton(text="👑 Oylik", callback_data="admin:lb:monthly"),
+            ],
+            [
+                InlineKeyboardButton(text="📢 Guruhga e'lon (Kunlik)", callback_data="admin:lb_post:daily"),
+            ],
+            [
+                InlineKeyboardButton(text="📢 Guruhga e'lon (Haftalik)", callback_data="admin:lb_post:weekly"),
+            ],
+            [
+                InlineKeyboardButton(text="📢 Guruhga e'lon (Oylik)", callback_data="admin:lb_post:monthly"),
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Orqaga", callback_data="admin:back_main"),
+            ],
         ]
     )

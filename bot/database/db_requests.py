@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
@@ -37,6 +37,28 @@ class Stats:
     orders_confirmed: int
     orders_taxi: int
     orders_parcel: int
+
+
+@dataclass(slots=True)
+class LeaderboardEntry:
+    driver_id: int
+    orders_count: int
+    taxi_count: int
+    parcel_count: int
+    full_name: str
+    username: str | None
+    car_model: str
+    car_number: str
+
+
+@dataclass(slots=True)
+class LeaderboardData:
+    start_dt: datetime
+    end_dt: datetime
+    total_orders: int
+    total_taxi: int
+    total_parcel: int
+    top_drivers: list[LeaderboardEntry]
 
 
 async def upsert_user(
@@ -447,4 +469,80 @@ async def get_stats(session: AsyncSession) -> Stats:
         orders_confirmed=await _count(Order.status == OrderStatus.CONFIRMED.value),
         orders_taxi=await _count(Order.order_type == OrderType.TAXI.value),
         orders_parcel=await _count(Order.order_type == OrderType.PARCEL.value),
+    )
+
+
+async def get_leaderboard_data(
+    session: AsyncSession,
+    start_dt: datetime,
+    end_dt: datetime,
+    limit: int = 10,
+) -> LeaderboardData:
+    """Belgilangan vaqt oralig'idagi tasdiqlangan buyurtmalar va top haydovchilar reytingi."""
+    totals_stmt = select(
+        func.count(Order.id),
+        func.coalesce(func.sum(case((Order.order_type == OrderType.TAXI.value, 1), else_=0)), 0),
+        func.coalesce(func.sum(case((Order.order_type == OrderType.PARCEL.value, 1), else_=0)), 0),
+    ).where(
+        Order.status == OrderStatus.CONFIRMED.value,
+        Order.updated_at >= start_dt,
+        Order.updated_at <= end_dt,
+    )
+    totals_row = (await session.execute(totals_stmt)).one()
+    total_orders = int(totals_row[0] or 0)
+    total_taxi = int(totals_row[1] or 0)
+    total_parcel = int(totals_row[2] or 0)
+
+    drivers_stmt = (
+        select(
+            Order.driver_id,
+            func.count(Order.id).label("total_orders"),
+            func.coalesce(func.sum(case((Order.order_type == OrderType.TAXI.value, 1), else_=0)), 0).label("taxi_orders"),
+            func.coalesce(func.sum(case((Order.order_type == OrderType.PARCEL.value, 1), else_=0)), 0).label("parcel_orders"),
+            Driver.full_name,
+            Driver.username,
+            Driver.car_model,
+            Driver.car_number,
+        )
+        .outerjoin(Driver, Order.driver_id == Driver.telegram_id)
+        .where(
+            Order.status == OrderStatus.CONFIRMED.value,
+            Order.driver_id.is_not(None),
+            Order.updated_at >= start_dt,
+            Order.updated_at <= end_dt,
+        )
+        .group_by(
+            Order.driver_id,
+            Driver.full_name,
+            Driver.username,
+            Driver.car_model,
+            Driver.car_number,
+        )
+        .order_by(func.count(Order.id).desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(drivers_stmt)).all()
+
+    top_drivers: list[LeaderboardEntry] = []
+    for row in rows:
+        top_drivers.append(
+            LeaderboardEntry(
+                driver_id=int(row[0]),
+                orders_count=int(row[1]),
+                taxi_count=int(row[2]),
+                parcel_count=int(row[3]),
+                full_name=row[4] or "Haydovchi",
+                username=row[5],
+                car_model=row[6] or "Avtomobil",
+                car_number=row[7] or "—",
+            )
+        )
+
+    return LeaderboardData(
+        start_dt=start_dt,
+        end_dt=end_dt,
+        total_orders=total_orders,
+        total_taxi=total_taxi,
+        total_parcel=total_parcel,
+        top_drivers=top_drivers,
     )

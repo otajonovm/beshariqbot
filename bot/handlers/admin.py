@@ -1,4 +1,4 @@
-"""Admin: statistika va obunani uzaytirish."""
+"""Admin: statistika, obunani uzaytirish va gemifikatsiya reytinglari."""
 
 from __future__ import annotations
 
@@ -17,7 +17,8 @@ from bot.config import settings
 from bot.database.db_requests import extend_subscription, get_driver, get_stats, list_drivers
 from bot.database.models import DriverStatus
 from bot.keyboards.default_kb import BTN_CANCEL, main_menu_kb
-from bot.keyboards.inline_kb import admin_menu_kb
+from bot.keyboards.inline_kb import admin_leaderboard_kb, admin_menu_kb
+from bot.services.leaderboard import get_leaderboard_text_by_type, publish_leaderboard_to_group
 from bot.states.order_states import AdminExtend
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,21 @@ async def cmd_stats(message: Message, session: AsyncSession) -> None:
     stats = await get_stats(session)
     recent = await list_drivers(session, limit=10)
     await message.answer(_fmt_stats(stats, recent))
+
+
+@router.message(Command("top", "reyting", "leaderboard"))
+async def cmd_admin_top(message: Message, session: AsyncSession) -> None:
+    """/top, /top hafta, /top oy orqali reytingni ko'rish."""
+    parts = (message.text or "").split()[1:]
+    p_type = "daily"
+    if parts:
+        arg = parts[0].lower()
+        if "hafta" in arg or "week" in arg:
+            p_type = "weekly"
+        elif "oy" in arg or "month" in arg:
+            p_type = "monthly"
+    text = await get_leaderboard_text_by_type(session, p_type)
+    await message.answer(text, disable_web_page_preview=True)
 
 
 @router.message(Command("drivers"))
@@ -182,6 +198,51 @@ async def cb_stats(callback: CallbackQuery, session: AsyncSession) -> None:
     recent = await list_drivers(session, limit=10)
     await callback.message.answer(_fmt_stats(stats, recent))
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin:lb_menu")
+async def cb_lb_menu(callback: CallbackQuery) -> None:
+    try:
+        await callback.message.edit_text(
+            "🏆 <b>Reyting va Statistika (Gemifikatsiya)</b>\n\n"
+            "Kerakli davrni tanlang yoki natijalarni hoziroq guruhga e'lon qiling:",
+            reply_markup=admin_leaderboard_kb(),
+        )
+    except TelegramBadRequest:
+        await callback.message.answer(
+            "🏆 <b>Reyting va Statistika (Gemifikatsiya)</b>\n\n"
+            "Kerakli davrni tanlang yoki natijalarni hoziroq guruhga e'lon qiling:",
+            reply_markup=admin_leaderboard_kb(),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:back_main")
+async def cb_back_main(callback: CallbackQuery) -> None:
+    try:
+        await callback.message.edit_text("🔐 Admin panel:", reply_markup=admin_menu_kb())
+    except TelegramBadRequest:
+        await callback.message.answer("🔐 Admin panel:", reply_markup=admin_menu_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:lb:"))
+async def cb_lb_view(callback: CallbackQuery, session: AsyncSession) -> None:
+    p_type = callback.data.split(":", 2)[2]
+    text = await get_leaderboard_text_by_type(session, p_type)
+    await callback.message.answer(text, disable_web_page_preview=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:lb_post:"))
+async def cb_lb_post(callback: CallbackQuery, session: AsyncSession) -> None:
+    p_type = callback.data.split(":", 2)[2]
+    text = await get_leaderboard_text_by_type(session, p_type)
+    ok = await publish_leaderboard_to_group(callback.bot, text)
+    if ok:
+        await callback.answer("✅ Reyting muvaffaqiyatli guruhga e'lon qilindi!", show_alert=True)
+    else:
+        await callback.answer("❌ Guruhga e'lon qilib bo'lmadi (bot adminligini tekshiring).", show_alert=True)
 
 
 @router.callback_query(F.data == "admin:drivers")

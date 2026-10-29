@@ -1,4 +1,4 @@
-"""APScheduler: obuna eslatmalari va qabul qilingan buyurtmalarni 3 minutlik timeout tekshiruvi."""
+"""APScheduler: obuna eslatmalari, 3 minutlik claim timeout va gemifikatsiya reytinglari."""
 
 from __future__ import annotations
 
@@ -19,6 +19,11 @@ from bot.database.db_requests import (
     set_group_posts,
 )
 from bot.database.models import DriverStatus, utcnow
+from bot.services.leaderboard import (
+    run_daily_leaderboard_job,
+    run_monthly_leaderboard_job,
+    run_weekly_leaderboard_job,
+)
 from bot.services.notify import notify_admins
 
 logger = logging.getLogger(__name__)
@@ -200,6 +205,7 @@ async def check_order_claim_timeouts(bot: Bot, session_maker: async_sessionmaker
 
 def setup_scheduler(bot: Bot, session_maker: async_sessionmaker) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
+    # 1. Obuna muddati va eslatmalar (har soatda)
     scheduler.add_job(
         check_driver_subscriptions,
         trigger="interval",
@@ -210,12 +216,51 @@ def setup_scheduler(bot: Bot, session_maker: async_sessionmaker) -> AsyncIOSched
         max_instances=1,
         coalesce=True,
     )
+    # 2. 3 daqiqalik claim timeout (har 10 soniyada)
     scheduler.add_job(
         check_order_claim_timeouts,
         trigger="interval",
         seconds=10,
         args=[bot, session_maker],
         id="order_claim_timeout_check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    # 3. Kunlik gemifikatsiya reytingi (har kuni soat 21:30 da)
+    scheduler.add_job(
+        run_daily_leaderboard_job,
+        trigger="cron",
+        hour=21,
+        minute=30,
+        args=[bot, session_maker],
+        id="daily_leaderboard_cron",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    # 4. Haftalik gemifikatsiya reytingi (har yakshanba soat 22:00 da)
+    scheduler.add_job(
+        run_weekly_leaderboard_job,
+        trigger="cron",
+        day_of_week="sun",
+        hour=22,
+        minute=0,
+        args=[bot, session_maker],
+        id="weekly_leaderboard_cron",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    # 5. Oylik gemifikatsiya reytingi (har oyning 1-kuni soat 10:00 da o'tgan oyni sarhisob qiladi)
+    scheduler.add_job(
+        run_monthly_leaderboard_job,
+        trigger="cron",
+        day=1,
+        hour=10,
+        minute=0,
+        args=[bot, session_maker],
+        id="monthly_leaderboard_cron",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
