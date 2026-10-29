@@ -334,13 +334,22 @@ class Order(Base):
 _db_url = settings.resolved_database_url()
 _engine_kwargs: dict[str, Any] = {"echo": False, "pool_pre_ping": True}
 if not settings.is_sqlite:
-    # Heroku Postgres: idle connectionlarni qayta ishlatish + SSL majburiy
+    # Postgres pool sozlamalari
     _engine_kwargs.update(
         pool_size=5,
         max_overflow=10,
         pool_recycle=1800,
-        connect_args={"ssl": True},
     )
+    # Railway internal tarmoqda (postgres.railway.internal) yoki localhost'da SSL shart emas.
+    # Boshqa holatlarda (tashqi Postgres, proxy) self-signed sertifikat xatolik bermasligi uchun SSL kontekst moslanadi.
+    if "railway.internal" in _db_url or "localhost" in _db_url or "127.0.0.1" in _db_url:
+        _engine_kwargs["connect_args"] = {"ssl": False}
+    else:
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        _engine_kwargs["connect_args"] = {"ssl": ctx}
 
 engine: AsyncEngine = create_async_engine(_db_url, **_engine_kwargs)
 
