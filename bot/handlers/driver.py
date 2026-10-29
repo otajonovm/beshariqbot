@@ -242,7 +242,10 @@ async def deal_ok(callback: CallbackQuery, session: AsyncSession) -> None:
 
     order = await confirm_deal(session, order_id, user.id)
     if order is None:
-        await callback.answer("Bu buyurtmani tasdiqlay olmaysiz.", show_alert=True)
+        await callback.answer(
+            "Bu buyurtmani tasdiqlay olmaysiz (3 daqiqalik vaqt tugagan bo'lishi mumkin).",
+            show_alert=True,
+        )
         return
 
     driver = await get_driver(session, user.id)
@@ -279,7 +282,10 @@ async def deal_cancel(callback: CallbackQuery, session: AsyncSession) -> None:
 
     order = await get_order(session, order_id)
     if order is None or order.driver_id != user.id or order.status != OrderStatus.ACCEPTED.value:
-        await callback.answer("Bekor qilish mumkin emas.", show_alert=True)
+        await callback.answer(
+            "Bekor qilish mumkin emas (3 daqiqalik vaqt tugagan bo'lishi mumkin).",
+            show_alert=True,
+        )
         return
 
     try:

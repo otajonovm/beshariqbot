@@ -216,6 +216,8 @@ class Order(Base):
     group_posts: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     rejected_drivers: Mapped[list[Any]] = mapped_column(JSON, default=list)
     last_cancel_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claim_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now()
     )
@@ -323,7 +325,9 @@ class Order(Base):
             f"{self.detail_icon()} <b>Tafsilot:</b> {self.detail_display()}\n"
             f"📞 <b>Telefon:</b> <code>{self.phone}</code>"
             f"{passenger_line}\n\n"
-            f"Mijoz bilan bog'laning. Natijani pastdagi tugmalar orqali belgilang."
+            f"⚠️ <b>Diqqat:</b> Mijoz bilan bog'lanib, <b>3 daqiqa</b> ichida pastdagi "
+            f"<b>«✅ Ha, oldim»</b> tugmasini bosing!\n"
+            f"Aks holda buyurtma avtomatik tarzda bekor qilinib, qaytadan guruhga tashlanadi."
         )
 
 
@@ -381,6 +385,11 @@ async def init_db() -> None:
             order_cols = {col["name"] for col in inspect(sync_conn).get_columns("orders")}
             if "group_posts" not in order_cols:
                 sync_conn.execute(text("ALTER TABLE orders ADD COLUMN group_posts JSON"))
+            if "claim_message_id" not in order_cols:
+                sync_conn.execute(text("ALTER TABLE orders ADD COLUMN claim_message_id INTEGER"))
+            if "claimed_at" not in order_cols:
+                col_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+                sync_conn.execute(text(f"ALTER TABLE orders ADD COLUMN claimed_at {col_type}"))
 
             # Eski SQLite: orders.driver_id → drivers FK ni olib tashlash
             if dialect != "sqlite":
@@ -411,6 +420,8 @@ async def init_db() -> None:
                         group_posts JSON,
                         rejected_drivers JSON NOT NULL,
                         last_cancel_reason VARCHAR(64),
+                        claim_message_id INTEGER,
+                        claimed_at DATETIME,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
                         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
                         FOREIGN KEY(passenger_id) REFERENCES users (telegram_id)
@@ -425,13 +436,15 @@ async def init_db() -> None:
                         id, order_type, status, passenger_id, driver_id, direction,
                         area, area_custom, seats, departure_time, cargo_description,
                         photo_file_id, phone, group_message_id, group_posts,
-                        rejected_drivers, last_cancel_reason, created_at, updated_at
+                        rejected_drivers, last_cancel_reason, claim_message_id,
+                        claimed_at, created_at, updated_at
                     )
                     SELECT
                         id, order_type, status, passenger_id, driver_id, direction,
                         area, area_custom, seats, departure_time, cargo_description,
                         photo_file_id, phone, group_message_id, group_posts,
-                        rejected_drivers, last_cancel_reason, created_at, updated_at
+                        rejected_drivers, last_cancel_reason, claim_message_id,
+                        claimed_at, created_at, updated_at
                     FROM orders
                     """
                 )

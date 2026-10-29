@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Literal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
@@ -173,6 +173,16 @@ async def set_group_posts(
     )
 
 
+async def set_order_claim_message(
+    session: AsyncSession, order_id: int, message_id: int
+) -> None:
+    """Haydovchiga yuborilgan tasdiqlash xabari ID sini saqlaydi."""
+    await session.execute(
+        update(Order).where(Order.id == order_id).values(claim_message_id=message_id)
+    )
+    await session.commit()
+
+
 async def claim_order(
     session: AsyncSession,
     order_id: int,
@@ -198,6 +208,7 @@ async def claim_order(
         if driver_id in order.rejected_id_list():
             return "cooldown", order
 
+        now = utcnow()
         result = await session.execute(
             update(Order)
             .where(
@@ -207,7 +218,8 @@ async def claim_order(
             .values(
                 status=OrderStatus.ACCEPTED.value,
                 driver_id=driver_id,
-                updated_at=utcnow(),
+                claimed_at=now,
+                updated_at=now,
             )
         )
         if result.rowcount != 1:
@@ -236,6 +248,8 @@ async def release_claim(
         return None
     order.driver_id = None
     order.status = OrderStatus.PENDING.value
+    order.claimed_at = None
+    order.claim_message_id = None
     order.updated_at = utcnow()
     await session.commit()
     return order
@@ -250,6 +264,7 @@ async def confirm_deal(session: AsyncSession, order_id: int, driver_id: int) -> 
     ):
         return None
     order.status = OrderStatus.CONFIRMED.value
+    order.claim_message_id = None
     order.updated_at = utcnow()
     await session.commit()
     return order
@@ -275,11 +290,56 @@ async def cancel_deal_and_reopen(
         order.driver_id = None
         order.status = OrderStatus.PENDING.value
         order.last_cancel_reason = reason
+        order.claimed_at = None
+        order.claim_message_id = None
         order.updated_at = utcnow()
 
     await session.commit()
     await session.refresh(order)
     return order
+
+
+async def list_expired_claimed_orders(
+    session: AsyncSession, timeout_seconds: int = 180
+) -> list[Order]:
+    """3 daqiqa ichida 'Ha, oldim' bosilmagan qabul qilingan buyurtmalarni topadi."""
+    threshold = utcnow() - timedelta(seconds=timeout_seconds)
+    stmt = (
+        select(Order)
+        .options(selectinload(Order.passenger))
+        .where(
+            Order.status == OrderStatus.ACCEPTED.value,
+            or_(
+                and_(Order.claimed_at.is_not(None), Order.claimed_at <= threshold),
+                and_(Order.claimed_at.is_(None), Order.updated_at <= threshold),
+            ),
+        )
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def expire_claimed_order(
+    session: AsyncSession, order_id: int
+) -> Order | None:
+    """3 daqiqalik vaqt tugagan buyurtmani guruhga qayta ochish va cooldown belgilash."""
+    async with session.begin_nested():
+        order = await session.get(Order, order_id, with_for_update=True)
+        if order is None or order.status != OrderStatus.ACCEPTED.value:
+            return None
+
+        if order.driver_id:
+            order.add_rejected_driver(order.driver_id)
+            flag_modified(order, "rejected_drivers")
+
+        order.driver_id = None
+        order.status = OrderStatus.PENDING.value
+        order.last_cancel_reason = "timeout_3min"
+        order.claimed_at = None
+        order.updated_at = utcnow()
+
+    await session.commit()
+    return await get_order(session, order_id, with_relations=True)
 
 
 async def extend_subscription(

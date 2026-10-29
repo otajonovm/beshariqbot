@@ -1,4 +1,4 @@
-"""APScheduler: obuna eslatmalari (10/5/1 kun) va muddat tugashi."""
+"""APScheduler: obuna eslatmalari va qabul qilingan buyurtmalarni 3 minutlik timeout tekshiruvi."""
 
 from __future__ import annotations
 
@@ -11,9 +11,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from bot.database.db_requests import (
+    expire_claimed_order,
+    list_expired_claimed_orders,
     list_subscription_drivers,
     mark_driver_expired,
     mark_sub_notified,
+    set_group_posts,
 )
 from bot.database.models import DriverStatus, utcnow
 from bot.services.notify import notify_admins
@@ -128,6 +131,73 @@ async def check_driver_subscriptions(bot: Bot, session_maker: async_sessionmaker
         )
 
 
+async def check_order_claim_timeouts(bot: Bot, session_maker: async_sessionmaker) -> None:
+    """3 daqiqa ichida 'Ha, oldim' bosilmagan buyurtmalarni qayta guruhga chiqarish."""
+    async with session_maker() as session:
+        expired = await list_expired_claimed_orders(session, timeout_seconds=180)
+
+    if not expired:
+        return
+
+    for exp in expired:
+        order_id = exp.id
+        old_driver_id = exp.driver_id
+        claim_msg_id = exp.claim_message_id
+        passenger_id = exp.passenger_id
+
+        async with session_maker() as session:
+            updated_order = await expire_claimed_order(session, order_id)
+            if updated_order is None:
+                continue
+
+            from bot.handlers.group import edit_group_card
+            from bot.keyboards.inline_kb import claim_kb
+
+            await edit_group_card(
+                bot,
+                updated_order,
+                updated_order.to_group_text(reactivated=True),
+                reply_markup=claim_kb(updated_order.id),
+            )
+            await set_group_posts(session, updated_order.id, updated_order.posts_map())
+            await session.commit()
+
+        if old_driver_id:
+            if claim_msg_id:
+                try:
+                    await bot.edit_message_reply_markup(
+                        chat_id=old_driver_id,
+                        message_id=claim_msg_id,
+                        reply_markup=None,
+                    )
+                except (TelegramBadRequest, TelegramForbiddenError):
+                    pass
+            try:
+                await bot.send_message(
+                    chat_id=old_driver_id,
+                    text=(
+                        f"⏰ <b>Vaqt tugadi!</b>\n\n"
+                        f"Siz <b>3 daqiqa</b> ichida <b>#{order_id}</b> buyurtmani tasdiqlamadingiz "
+                        f"(«Ha, oldim» tugmasi bosilmadi).\n"
+                        f"Buyurtma qaytadan haydovchilar guruhiga chiqarildi."
+                    ),
+                )
+            except (TelegramBadRequest, TelegramForbiddenError):
+                pass
+
+        if passenger_id:
+            try:
+                await bot.send_message(
+                    chat_id=passenger_id,
+                    text=(
+                        f"ℹ️ Haydovchi 3 daqiqa ichida buyurtmangizni tasdiqlamadi.\n"
+                        f"<b>#{order_id}</b> buyurtmangiz qaytadan haydovchilar guruhiga chiqarildi."
+                    ),
+                )
+            except (TelegramBadRequest, TelegramForbiddenError):
+                pass
+
+
 def setup_scheduler(bot: Bot, session_maker: async_sessionmaker) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
     scheduler.add_job(
@@ -136,6 +206,16 @@ def setup_scheduler(bot: Bot, session_maker: async_sessionmaker) -> AsyncIOSched
         hours=1,
         args=[bot, session_maker],
         id="subscription_check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        check_order_claim_timeouts,
+        trigger="interval",
+        seconds=10,
+        args=[bot, session_maker],
+        id="order_claim_timeout_check",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

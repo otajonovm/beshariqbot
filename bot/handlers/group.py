@@ -15,6 +15,7 @@ from bot.database.db_requests import (
     get_driver,
     release_claim,
     set_group_posts,
+    set_order_claim_message,
 )
 from bot.database.models import Order
 from bot.keyboards.inline_kb import claim_kb, deal_kb
@@ -154,7 +155,10 @@ async def process_claim(
     if result == "not_found":
         return "Buyurtma topilmadi."
     if result == "cooldown":
-        return "Siz bu buyurtmani avval bekor qilgansiz. Boshqa haydovchilar olishi mumkin."
+        return (
+            "Siz bu buyurtmani avval o'z vaqtida tasdiqlamagansiz yoki bekor qilgansiz. "
+            "Boshqa haydovchilar olishi mumkin."
+        )
     if result == "taken":
         return "Kechirasiz, ushbu buyurtmani boshqa haydovchi oldi!"
     if result != "ok" or order is None:
@@ -171,11 +175,12 @@ async def process_claim(
     passenger = order.passenger
     private_text = order.to_driver_private_text(passenger)
     try:
-        await bot.send_message(
+        sent_msg = await bot.send_message(
             chat_id=user.id,
             text=private_text,
             reply_markup=deal_kb(order.id),
         )
+        await set_order_claim_message(session, order.id, sent_msg.message_id)
     except TelegramForbiddenError:
         await release_claim(session, order.id, user.id)
         await edit_group_card(
