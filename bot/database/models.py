@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
+    UniqueConstraint,
     event,
     func,
     inspect,
@@ -31,7 +32,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from bot.config import settings
 
-TZ_UTC = timezone.utc
+TZ_UTC = UTC
 
 
 def utcnow() -> datetime:
@@ -329,6 +330,44 @@ class Order(Base):
             f"<b>«✅ Ha, oldim»</b> tugmasini bosing!\n"
             f"Aks holda buyurtma avtomatik tarzda bekor qilinib, qaytadan guruhga tashlanadi."
         )
+
+
+class RelayHit(Base):
+    """Manba guruhdan asosiy guruhga yuborilgan yo'lovchi xabari."""
+
+    __tablename__ = "relay_hits"
+    __table_args__ = (
+        UniqueConstraint("source_chat_id", "source_message_id", name="uq_relay_src_msg"),
+        Index("ix_relay_hits_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    source_message_id: Mapped[int] = mapped_column(Integer)
+    source_title: Mapped[str] = mapped_column(String(255), default="")
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    norm_text: Mapped[str] = mapped_column(String(420), default="")
+    handle_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
+    )
+
+
+class RelayKeyword(Base):
+    """Admin qo'shgan yoki o'chirgan qo'shimcha kalit so'z.
+
+    kind: passenger | driver | off
+    """
+
+    __tablename__ = "relay_keywords"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    phrase: Mapped[str] = mapped_column(String(160), unique=True)
+    weight: Mapped[int] = mapped_column(Integer, default=5)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
+    )
 
 
 _db_url = settings.resolved_database_url()

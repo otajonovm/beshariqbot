@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import timezone
+from datetime import UTC
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -18,6 +18,9 @@ from bot.database.db_requests import extend_subscription, get_driver, get_stats,
 from bot.database.models import DriverStatus
 from bot.keyboards.default_kb import BTN_CANCEL, main_menu_kb
 from bot.keyboards.inline_kb import admin_leaderboard_kb, admin_menu_kb
+from bot.relay.detect import normalize
+from bot.relay.service import groups_overview
+from bot.relay.store import add_keyword, disable_keyword, format_relay_stats
 from bot.services.leaderboard import get_leaderboard_text_by_type, publish_leaderboard_to_group
 from bot.states.order_states import AdminExtend
 
@@ -39,7 +42,7 @@ def _fmt_dt(dt) -> str:
     if dt is None:
         return "—"
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.astimezone().strftime("%d.%m.%Y %H:%M")
 
 
@@ -90,8 +93,17 @@ async def admin_panel(message: Message, state: FSMContext) -> None:
     await message.answer("🔐 Admin panel:", reply_markup=admin_menu_kb())
 
 
+async def _relay_stats(session: AsyncSession) -> str:
+    try:
+        return await format_relay_stats(session)
+    except Exception:
+        logger.exception("relay stats")
+        return "🚕 <b>Yo'naltirish (bugun)</b>\nStatistika hozircha o'qilmadi."
+
+
 @router.message(Command("stats"))
 async def cmd_stats(message: Message, session: AsyncSession) -> None:
+    await message.answer(await _relay_stats(session))
     stats = await get_stats(session)
     recent = await list_drivers(session, limit=10)
     await message.answer(_fmt_stats(stats, recent))
@@ -178,7 +190,7 @@ async def _groups_status_text(bot) -> str:
     lines.append(
         "\nTekshirish: guruhda botni admin qiling, keyin yana /groups yuboring."
     )
-    return "\n\n".join(lines)
+    return "\n\n".join(lines) + "\n\n" + groups_overview()
 
 
 @router.message(Command("groups"))
@@ -192,8 +204,59 @@ async def cb_groups(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+_WORD_KINDS = {
+    "passenger": "passenger",
+    "yolovchi": "passenger",
+    "p": "passenger",
+    "driver": "driver",
+    "haydovchi": "driver",
+    "h": "driver",
+    "d": "driver",
+}
+
+
+def _parse_kind(token: str) -> str | None:
+    return _WORD_KINDS.get(normalize(token))
+
+
+@router.message(Command("addword"))
+async def cmd_addword(message: Message, session: AsyncSession) -> None:
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3 or _parse_kind(parts[1]) is None:
+        await message.answer(
+            "Format:\n"
+            "<code>/addword yolovchi taksi shart</code>\n"
+            "<code>/addword haydovchi bosh joy</code>"
+        )
+        return
+    kind = _parse_kind(parts[1]) or "passenger"
+    ok, phrase = await add_keyword(session, kind, parts[2])
+    if not ok:
+        await message.answer(phrase)
+        return
+    label = "yo'lovchi" if kind == "passenger" else "haydovchi"
+    await message.answer(f"✅ Qo'shildi ({label}): <code>{phrase}</code>")
+
+
+@router.message(Command("delword"))
+async def cmd_delword(message: Message, session: AsyncSession) -> None:
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer("Format: <code>/delword joy bor</code>")
+        return
+    ok, phrase = await disable_keyword(session, parts[1])
+    if not ok:
+        await message.answer(f"Topilmadi: <code>{phrase}</code>")
+        return
+    await message.answer(f"🗑 O'chirildi: <code>{phrase}</code>")
+
+
 @router.callback_query(F.data == "admin:stats")
 async def cb_stats(callback: CallbackQuery, session: AsyncSession) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    await callback.message.answer(await _relay_stats(session))
     stats = await get_stats(session)
     recent = await list_drivers(session, limit=10)
     await callback.message.answer(_fmt_stats(stats, recent))
@@ -332,7 +395,7 @@ async def _do_extend(message: Message, session: AsyncSession, driver_id: int, da
 
     until = driver.subscription_until
     if until and until.tzinfo is None:
-        until = until.replace(tzinfo=timezone.utc)
+        until = until.replace(tzinfo=UTC)
     until_s = until.astimezone().strftime("%d.%m.%Y %H:%M") if until else "—"
 
     await message.answer(

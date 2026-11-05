@@ -41,6 +41,9 @@ async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
         return
     if event.new_chat_member.status not in {"administrator", "member", "creator"}:
         return
+    from bot.relay.service import note_group
+
+    note_group(event.chat.id, event.chat.title or "", event.new_chat_member.status)
     known = event.chat.id in settings.group_ids
     status = "ulangan" if known else "noma'lum guruh (sozlamada yo'q)"
     logger.info("Bot guruhga qo'shildi: %s %s (%s)", event.chat.id, event.chat.title, status)
@@ -72,8 +75,8 @@ async def _send_card(
             text=text,
             reply_markup=reply_markup,
         )
-    except (TelegramBadRequest, TelegramForbiddenError) as exc:
-        logger.exception("Guruhga yuborilmadi %s / #%s: %s", chat_id, order.id, exc)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        logger.exception("Guruhga yuborilmadi %s / #%s", chat_id, order.id)
         return None
 
 

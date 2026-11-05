@@ -44,6 +44,10 @@ jobs:
             exit 1
           fi
 
+          if ! heroku config:get WEBHOOK_URL -a "$HEROKU_APP" | grep -q .; then
+            heroku config:set WEBHOOK_URL="https://$HEROKU_APP.herokuapp.com" -a "$HEROKU_APP"
+          fi
+
           git push heroku HEAD:main --force
           heroku ps:restart -a "$HEROKU_APP"
           echo "Deployed $(git rev-parse --short HEAD) to $HEROKU_APP"

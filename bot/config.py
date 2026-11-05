@@ -1,8 +1,9 @@
 """Pydantic Settings — .env orqali bot sozlamalari."""
 
+import hashlib
+import os
 from functools import lru_cache
 from pathlib import Path
-import os
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
@@ -43,6 +44,19 @@ class Settings(BaseSettings):
         description="Qo'shimcha admin Telegram ID lari",
     )
     currency: str = Field(default="UZS")
+    # Yo'lovchi xabarini asosiy guruhga ko'chirish.
+    # MAIN_GROUP_ID bo'sh bo'lsa PRIMARY_GROUP_ID (426. Global) ishlatiladi.
+    main_group_id: int | None = Field(default=None)
+    # Bo'sh bo'lsa — bot turgan barcha guruhlar (asosiy guruhdan tashqari).
+    source_group_ids: str = Field(default="")
+    dedup_minutes: int = Field(default=10)
+    relay_min_score: int = Field(default=3)
+    relay_max_chars: int = Field(default=400)
+    relay_rate_per_minute: int = Field(default=18)
+    # auto: Heroku'da webhook, lokalda polling. 0 — majburiy polling. 1 — webhook.
+    use_webhook: str = Field(default="auto")
+    webhook_url: str = Field(default="")
+    webhook_secret: str = Field(default="")
     # Heroku Postgres: heroku addons:create heroku-postgresql
     # Agar bo'sh bo'lsa — lokal SQLite (faqat development uchun)
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
@@ -52,10 +66,17 @@ class Settings(BaseSettings):
     def strip_token(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("supergroup_ids", mode="before")
+    @field_validator("supergroup_ids", "source_group_ids", "use_webhook", "webhook_url", mode="before")
     @classmethod
     def strip_ids(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("main_group_id", mode="before")
+    @classmethod
+    def empty_main_group(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
+        return value
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -142,6 +163,53 @@ class Settings(BaseSettings):
     def is_heroku(self) -> bool:
         """Heroku dyno muhiti (filesystem ephemeral)."""
         return bool(os.environ.get("DYNO"))
+
+    @property
+    def resolved_main_group_id(self) -> int:
+        """Yo'naltirish manzili. MAIN_GROUP_ID yo'q bo'lsa 426. Global (PRIMARY_GROUP_ID)."""
+        if self.main_group_id:
+            return int(self.main_group_id)
+        return self.primary_group_id
+
+    @property
+    def resolved_source_group_ids(self) -> list[int] | None:
+        """None — asosiy guruhdan boshqa hamma guruh. Bo'sh ro'yxat — hech qayerdan emas."""
+        raw = (self.source_group_ids or "").strip()
+        if not raw or raw == "*":
+            return None
+        main = self.resolved_main_group_id
+        ids: list[int] = []
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                value = int(part)
+            except ValueError:
+                continue
+            if value != main and value not in ids:
+                ids.append(value)
+        return ids
+
+    def webhook_base(self) -> str | None:
+        """Webhook ildiz URL. Polling kerak bo'lsa None."""
+        mode = (self.use_webhook or "auto").strip().lower()
+        if mode in {"0", "false", "off", "no", "polling"}:
+            return None
+        url = (self.webhook_url or "").strip().rstrip("/")
+        if url:
+            return url
+        if mode in {"1", "true", "on", "yes", "webhook"} or (mode == "auto" and self.is_heroku):
+            app = os.environ.get("HEROKU_APP_NAME", "beshariqbot")
+            return f"https://{app}.herokuapp.com"
+        return None
+
+    def resolved_webhook_secret(self) -> str:
+        raw = (self.webhook_secret or "").strip()
+        if raw:
+            return raw
+        digest = hashlib.sha256(f"beshariq-relay:{self.bot_token}".encode()).hexdigest()
+        return digest[:32]
 
 
 @lru_cache(maxsize=1)
