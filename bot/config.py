@@ -53,12 +53,11 @@ class Settings(BaseSettings):
     relay_min_score: int = Field(default=3)
     relay_max_chars: int = Field(default=400)
     relay_rate_per_minute: int = Field(default=18)
-    # auto: Heroku'da webhook, lokalda polling. 0 — majburiy polling. 1 — webhook.
+    # auto: Railway'da webhook, lokalda polling. 0 — majburiy polling. 1 — webhook.
     use_webhook: str = Field(default="auto")
     webhook_url: str = Field(default="")
     webhook_secret: str = Field(default="")
-    # Heroku Postgres: heroku addons:create heroku-postgresql
-    # Agar bo'sh bo'lsa — lokal SQLite (faqat development uchun)
+    # Railway Postgres DATABASE_URL. Bo'sh bo'lsa — lokal SQLite.
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
 
     @field_validator("bot_token", mode="before")
@@ -86,7 +85,7 @@ class Settings(BaseSettings):
         if not isinstance(value, str):
             return value
         url = value.strip()
-        # Heroku beradi: postgres://... — SQLAlchemy 2 async uchun asyncpg kerak
+        # postgres://... — SQLAlchemy 2 async uchun asyncpg kerak
         if url.startswith("postgres://"):
             url = "postgresql://" + url[len("postgres://") :]
         if url.startswith("postgresql://"):
@@ -148,7 +147,7 @@ class Settings(BaseSettings):
         return bool(user_id and user_id in self.admin_ids)
 
     def resolved_database_url(self) -> str:
-        """Heroku/Postgres DATABASE_URL yoki lokal SQLite."""
+        """Postgres DATABASE_URL yoki lokal SQLite."""
         if self.database_url:
             return self.database_url
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -160,9 +159,13 @@ class Settings(BaseSettings):
         return self.resolved_database_url().startswith("sqlite")
 
     @property
-    def is_heroku(self) -> bool:
-        """Heroku dyno muhiti (filesystem ephemeral)."""
-        return bool(os.environ.get("DYNO"))
+    def is_railway(self) -> bool:
+        """Railway muhiti (filesystem ephemeral)."""
+        return bool(
+            os.environ.get("RAILWAY_ENVIRONMENT")
+            or os.environ.get("RAILWAY_PROJECT_ID")
+            or os.environ.get("RAILWAY_SERVICE_ID")
+        )
 
     @property
     def resolved_main_group_id(self) -> int:
@@ -199,9 +202,16 @@ class Settings(BaseSettings):
         url = (self.webhook_url or "").strip().rstrip("/")
         if url:
             return url
-        if mode in {"1", "true", "on", "yes", "webhook"} or (mode == "auto" and self.is_heroku):
-            app = os.environ.get("HEROKU_APP_NAME", "beshariqbot")
-            return f"https://{app}.herokuapp.com"
+        if mode in {"1", "true", "on", "yes", "webhook"} or (mode == "auto" and self.is_railway):
+            domain = (
+                os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+                or os.environ.get("RAILWAY_STATIC_URL")
+                or ""
+            ).strip().rstrip("/")
+            if domain:
+                if domain.startswith("http://") or domain.startswith("https://"):
+                    return domain
+                return f"https://{domain}"
         return None
 
     def resolved_webhook_secret(self) -> str:

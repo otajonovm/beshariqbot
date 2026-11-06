@@ -96,11 +96,11 @@ async def prepare(bot: Bot, scheduler: AsyncIOScheduler) -> None:
     global _prepared
     if _prepared:
         return
-    if settings.is_heroku and settings.is_sqlite:
+    if settings.is_railway and settings.is_sqlite:
         msg = (
-            "Heroku'da SQLite ishlatilmoqda — baza har dyno restartida o'chadi "
+            "Railway'da SQLite ishlatilmoqda — baza har redeployda o'chadi "
             "(haydovchi/foydalanuvchi soni 'nolga' qaytadi).\n"
-            "Yechim: heroku addons:create heroku-postgresql:essential-0 -a beshariqbot"
+            "Yechim: Railway Postgres qo'shing va DATABASE_URL ni ulang."
         )
         logger.error(msg)
         try:
@@ -177,7 +177,7 @@ async def on_error(event: ErrorEvent) -> None:
 
 
 async def start_health_server() -> None:
-    """Heroku web dyno $PORT ni band qiladi, aks holda R10 timeout bo'ladi."""
+    """Cloud'da $PORT ni band qiladi (health check)."""
     port = os.getenv("PORT")
     if not port:
         return

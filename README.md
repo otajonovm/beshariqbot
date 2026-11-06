@@ -1,6 +1,6 @@
 # Beshariq–Toshkent taksi boti
 
-Aiogram 3 dagi bot. Buyurtma, haydovchi va admin oqimlari o'z holicha qoladi. Quyidagi bo'lim guruhlardagi yo'lovchi xabarini **426. Global** asosiy guruhga zudlik bilan olib o'tadi.
+Aiogram 3 dagi bot. Hosting: **Railway**. Buyurtma, haydovchi va admin oqimlari o'z holicha qoladi. Quyidagi bo'lim guruhlardagi yo'lovchi xabarini **426. Global** asosiy guruhga zudlik bilan olib o'tadi.
 
 ## Guruhdan asosiy guruhga tezkor yo'naltirish
 
@@ -29,10 +29,10 @@ relay delay_ms=180 since_msg_ms=240 chat_id=... message_id=...
 | `RELAY_MIN_SCORE` | Yo'lovchi balli chegarasi. Standart: `3` |
 | `RELAY_MAX_CHARS` | Bundan uzun xabar spam hisoblanadi. Standart: `400` |
 | `RELAY_RATE_PER_MINUTE` | Asosiy guruhga daqiqalik limit (Telegram ~20). Standart: `18`. Limit ichida kutish yo'q |
-| `USE_WEBHOOK` | `auto` (Heroku'da webhook, lokalda polling), `0` (faqat polling), `1` (webhook) |
-| `WEBHOOK_URL` | Masalan `https://beshariqbot.herokuapp.com`. Bo'sh bo'lsa va dyno Heroku bo'lsa, shu nomdagi manzil olinadi |
+| `USE_WEBHOOK` | `auto` (Railway'da webhook, lokalda polling), `0` (faqat polling), `1` (webhook) |
+| `WEBHOOK_URL` | Masalan `https://your-service.up.railway.app`. Bo'sh bo'lsa Railway `RAILWAY_PUBLIC_DOMAIN` ishlatiladi |
 | `WEBHOOK_SECRET` | Ixtiyoriy. Bo'sh bo'lsa token dan barqaror sirf hosil qilinadi |
-| `DATABASE_URL` | Heroku Postgres. Statistika va `/addword` shu yerda saqlanadi |
+| `DATABASE_URL` | Railway Postgres. Statistika va `/addword` shu yerda saqlanadi |
 
 Kalit so'zlarning asosiy ro'yxati: `bot/relay/keywords.py`. Ishlayotgan botda qo'shish:
 
@@ -51,7 +51,7 @@ Kalit so'zlarning asosiy ro'yxati: `bot/relay/keywords.py`. Ishlayotgan botda qo
 2. Privacy o'zgargach botni har bir manba guruhdan chiqarib, qayta qo'shing. Eski a'zolik yangi rejimni olmaydi.
 3. Botni har bir manba guruhga **admin** qiling (xabarlarni o'qishi uchun).
 4. Asosiy guruhda (426. Global) bot admin bo'lsin va **xabar yozish** huquqi yoqilgan bo'lsin. Aks holda karta chiqmaydi.
-5. Bitta web dyno yetarli: `heroku ps:scale web=1 -a beshariqbot`. Ikkinchi dyno pollingda dublikat beradi; webhook rejimida bitta dyno qoldiring.
+5. Railway'da bitta service yetarli. Public Domain yoqing, Postgres ulang (`DATABASE_URL`).
 
 ### Guruh ID sini topish
 
@@ -63,7 +63,7 @@ Superguruh ID si odatda `-100` bilan boshlanadi. `t.me/c/...` havoladagi raqam o
 
 ### Tezlik
 
-Aniqlash (lotin/kirill, ball) import paytida yig'ilgan regexda bajariladi. 90 ta misolni o'lchaganda har bir matn taxminan **0.01 ms**. Asosiy vaqt — Telegram `sendMessage` javobi. Heroku'dan bu odatda **100–400 ms** (`delay_ms`).
+Aniqlash (lotin/kirill, ball) import paytida yig'ilgan regexda bajariladi. 90 ta misolni o'lchaganda har bir matn taxminan **0.01 ms**. Asosiy vaqt — Telegram `sendMessage` javobi. Railway'dan bu odatda **100–400 ms** (`delay_ms`).
 
 Webhook rejimida Telegram xabarni darhol beradi, qo'shimcha poll kutishi yo'q. Polling qolsa, long poll **50 soniya** — bu kechikish emas: ulanish ochiq turadi va xabar kelishi bilan darhol olinadi. `handle_as_tasks` yoqilgan, shuning uchun bitta sekin ish keyingisini to'smaydi.
 
