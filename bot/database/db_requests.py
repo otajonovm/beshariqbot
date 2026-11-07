@@ -94,6 +94,131 @@ async def get_driver(session: AsyncSession, telegram_id: int) -> Driver | None:
     return await session.get(Driver, telegram_id)
 
 
+def _nonempty(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+async def update_driver_fields(
+    session: AsyncSession,
+    telegram_id: int,
+    *,
+    full_name: str | None = None,
+    username: str | None = None,
+    car_model: str | None = None,
+    car_number: str | None = None,
+    phone: str | None = None,
+    car_color: str | None = None,
+    seats_count: int | None = None,
+    photo_file_id: str | None = None,
+    clear_photo: bool = False,
+) -> Driver | None:
+    """Mavjud haydovchi maydonlarini to'ldirish. Bo'sh qiymat ustiga yozilmaydi."""
+    driver = await session.get(Driver, telegram_id)
+    if driver is None:
+        return None
+    if full_name is not None and len(full_name.strip()) >= 3:
+        driver.full_name = full_name.strip()
+    if username is not None:
+        driver.username = username
+    if (model := _nonempty(car_model)) is not None:
+        driver.car_model = model
+    if (number := _nonempty(car_number)) is not None:
+        driver.car_number = number
+    if (phone_v := _nonempty(phone)) is not None:
+        driver.phone = phone_v
+    if (color := _nonempty(car_color)) is not None:
+        driver.car_color = color
+    if seats_count is not None and seats_count > 0:
+        driver.seats_count = seats_count
+    if clear_photo:
+        driver.photo_file_id = None
+    elif (photo := _nonempty(photo_file_id)) is not None:
+        driver.photo_file_id = photo
+    await session.flush()
+    return driver
+
+
+async def submit_driver_application(
+    session: AsyncSession,
+    *,
+    telegram_id: int,
+    full_name: str,
+    username: str | None,
+    car_model: str,
+    car_number: str,
+    phone: str,
+    car_color: str | None = None,
+    seats_count: int | None = None,
+    photo_file_id: str | None = None,
+) -> tuple[Driver, bool]:
+    """
+    Yangi haydovchi arizasi (pending).
+
+    Qaytaradi: (driver, created_new_application).
+    Mavjud active/expired haydovchini pendingga tushirmaydi — faqat maydonlarni to'ldiradi.
+    """
+    existing = await session.get(Driver, telegram_id)
+    if existing is not None and existing.is_legacy_or_approved():
+        await update_driver_fields(
+            session,
+            telegram_id,
+            full_name=full_name,
+            username=username,
+            car_model=car_model,
+            car_number=car_number,
+            phone=phone,
+            car_color=car_color,
+            seats_count=seats_count,
+            photo_file_id=photo_file_id,
+        )
+        await session.refresh(existing)
+        return existing, False
+
+    if existing is not None:
+        # pending / rejected / banned — ariza maydonlarini yangilash (banned status saqlanadi)
+        existing.full_name = full_name.strip()
+        existing.username = username
+        existing.car_model = car_model.strip()
+        existing.car_number = car_number.strip()
+        existing.phone = phone.strip()
+        if (color := _nonempty(car_color)) is not None:
+            existing.car_color = color
+        if seats_count is not None and seats_count > 0:
+            existing.seats_count = seats_count
+        if (photo := _nonempty(photo_file_id)) is not None:
+            existing.photo_file_id = photo
+        if existing.status != DriverStatus.BANNED.value:
+            existing.status = DriverStatus.PENDING.value
+            existing.kicked_at = None
+        await session.flush()
+        return existing, existing.status == DriverStatus.PENDING.value
+
+    driver = Driver(
+        telegram_id=telegram_id,
+        full_name=full_name.strip(),
+        username=username,
+        car_model=car_model.strip(),
+        car_number=car_number.strip(),
+        phone=phone.strip(),
+        car_color=_nonempty(car_color),
+        seats_count=seats_count if seats_count and seats_count > 0 else None,
+        photo_file_id=_nonempty(photo_file_id),
+        trial_start=utcnow(),
+        status=DriverStatus.PENDING.value,
+        notified_day5=True,
+        notified_day7=True,
+        notified_sub_10=False,
+        notified_sub_5=False,
+        notified_sub_1=False,
+    )
+    session.add(driver)
+    await session.flush()
+    return driver, True
+
+
 async def create_driver(
     session: AsyncSession,
     *,
@@ -104,14 +229,23 @@ async def create_driver(
     car_number: str,
     phone: str,
 ) -> Driver:
+    """Eski API: mavjud haydovchini yangilaydi yoki active yaratadi (legacy)."""
     existing = await session.get(Driver, telegram_id)
     if existing is not None:
-        existing.full_name = full_name
-        existing.username = username
-        existing.car_model = car_model
-        existing.car_number = car_number
-        existing.phone = phone
-        if existing.status != DriverStatus.BANNED.value:
+        await update_driver_fields(
+            session,
+            telegram_id,
+            full_name=full_name,
+            username=username,
+            car_model=car_model,
+            car_number=car_number,
+            phone=phone,
+        )
+        if existing.status not in {
+            DriverStatus.BANNED.value,
+            DriverStatus.PENDING.value,
+            DriverStatus.REJECTED.value,
+        }:
             existing.status = DriverStatus.ACTIVE.value
             existing.kicked_at = None
         await session.flush()
@@ -133,6 +267,51 @@ async def create_driver(
         notified_sub_1=False,
     )
     session.add(driver)
+    await session.flush()
+    return driver
+
+
+async def approve_driver(session: AsyncSession, telegram_id: int) -> Driver | None:
+    driver = await session.get(Driver, telegram_id)
+    if driver is None:
+        return None
+    if driver.status == DriverStatus.BANNED.value:
+        return driver
+    driver.status = DriverStatus.ACTIVE.value
+    driver.kicked_at = None
+    await session.flush()
+    return driver
+
+
+async def reject_driver(session: AsyncSession, telegram_id: int) -> Driver | None:
+    driver = await session.get(Driver, telegram_id)
+    if driver is None:
+        return None
+    if driver.status == DriverStatus.BANNED.value:
+        return driver
+    driver.status = DriverStatus.REJECTED.value
+    await session.flush()
+    return driver
+
+
+async def block_driver(session: AsyncSession, telegram_id: int) -> Driver | None:
+    driver = await session.get(Driver, telegram_id)
+    if driver is None:
+        return None
+    driver.status = DriverStatus.BANNED.value
+    driver.kicked_at = utcnow()
+    await session.flush()
+    return driver
+
+
+async def unblock_driver(session: AsyncSession, telegram_id: int) -> Driver | None:
+    driver = await session.get(Driver, telegram_id)
+    if driver is None:
+        return None
+    if driver.status != DriverStatus.BANNED.value:
+        return driver
+    driver.status = DriverStatus.ACTIVE.value
+    driver.kicked_at = None
     await session.flush()
     return driver
 
@@ -431,12 +610,21 @@ async def list_subscription_drivers(session: AsyncSession) -> list[Driver]:
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def list_drivers(session: AsyncSession, limit: int = 30) -> list[Driver]:
-    """Faqat profil to'ldirgan haydovchilar (claim stublari emas)."""
-    stmt = select(Driver).order_by(Driver.created_at.desc()).limit(limit * 3)
+async def list_drivers(session: AsyncSession, limit: int = 50) -> list[Driver]:
+    """Barcha haydovchilar (stub emas: ism yoki majburiy maydon bor)."""
+    stmt = select(Driver).order_by(Driver.created_at.desc()).limit(max(limit * 2, 50))
     all_rows = list((await session.execute(stmt)).scalars().all())
-    complete = [d for d in all_rows if d.is_profile_complete()]
-    return complete[:limit]
+    real: list[Driver] = []
+    for d in all_rows:
+        if d.is_profile_complete() or d.is_legacy_or_approved() or d.status in {
+            DriverStatus.PENDING.value,
+            DriverStatus.REJECTED.value,
+            DriverStatus.BANNED.value,
+        }:
+            real.append(d)
+        elif len((d.full_name or "").strip()) >= 3:
+            real.append(d)
+    return real[:limit]
 
 
 async def get_stats(session: AsyncSession) -> Stats:

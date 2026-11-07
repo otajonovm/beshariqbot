@@ -52,9 +52,24 @@ class OrderStatus(str, Enum):
 
 
 class DriverStatus(str, Enum):
+    PENDING = "pending"  # yangi ariza — admin tasdig'i kutilyapti
     ACTIVE = "active"
     EXPIRED = "expired"
     BANNED = "banned"
+    REJECTED = "rejected"
+
+
+# Majburiy / ixtiyoriy profil maydonlari (admin /drivers uchun)
+REQUIRED_DRIVER_FIELDS: tuple[str, ...] = ("phone", "car_model", "car_number")
+OPTIONAL_DRIVER_FIELDS: tuple[str, ...] = ("car_color", "seats_count", "photo_file_id")
+DRIVER_FIELD_LABELS: dict[str, str] = {
+    "phone": "telefon",
+    "car_model": "mashina rusumi",
+    "car_number": "davlat raqami",
+    "car_color": "rang",
+    "seats_count": "o'rinlar soni",
+    "photo_file_id": "rasm",
+}
 
 
 class Direction(str, Enum):
@@ -119,6 +134,10 @@ class Driver(Base):
     car_model: Mapped[str] = mapped_column(String(128))
     car_number: Mapped[str] = mapped_column(String(32))
     phone: Mapped[str] = mapped_column(String(32))
+    # Ixtiyoriy profil maydonlari (migratsiya orqali qo'shiladi)
+    car_color: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    seats_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    photo_file_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     trial_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     subscription_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -140,6 +159,14 @@ class Driver(Base):
         back_populates="driver",
     )
 
+    @staticmethod
+    def _blank(value: object | None) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return value.strip() in _PROFILE_PLACEHOLDERS
+        return False
+
     def _aware(self, dt: datetime | None) -> datetime | None:
         if dt is None:
             return None
@@ -152,14 +179,44 @@ class Driver(Base):
         until = self._aware(self.subscription_until)
         return until is not None and until > now
 
+    def missing_required_fields(self) -> list[str]:
+        """Majburiy maydonlar: telefon, rusum, davlat raqami."""
+        missing: list[str] = []
+        if self._blank(self.phone):
+            missing.append("phone")
+        if self._blank(self.car_model):
+            missing.append("car_model")
+        if self._blank(self.car_number):
+            missing.append("car_number")
+        return missing
+
+    def missing_optional_fields(self) -> list[str]:
+        missing: list[str] = []
+        if self._blank(self.car_color):
+            missing.append("car_color")
+        if self.seats_count is None or self.seats_count <= 0:
+            missing.append("seats_count")
+        if self._blank(self.photo_file_id):
+            missing.append("photo_file_id")
+        return missing
+
+    def missing_field_labels(self) -> list[str]:
+        keys = self.missing_required_fields() + self.missing_optional_fields()
+        return [DRIVER_FIELD_LABELS.get(k, k) for k in keys]
+
     def is_profile_complete(self) -> bool:
-        """Mashina va telefon to'ldirilganmi (guruh claim stub emas)."""
+        """Majburiy maydonlar to'ldirilganmi (guruh claim stub emas)."""
         return (
             len((self.full_name or "").strip()) >= 3
-            and (self.car_model or "").strip() not in _PROFILE_PLACEHOLDERS
-            and (self.car_number or "").strip() not in _PROFILE_PLACEHOLDERS
-            and (self.phone or "").strip() not in _PROFILE_PLACEHOLDERS
+            and not self.missing_required_fields()
         )
+
+    def is_legacy_or_approved(self) -> bool:
+        """Mavjud/tasdiqlangan haydovchi — qayta ariza kerak emas."""
+        return self.status in {
+            DriverStatus.ACTIVE.value,
+            DriverStatus.EXPIRED.value,
+        }
 
     def subscription_days_left(self, now: datetime | None = None) -> int | None:
         """Obuna tugashiga qolgan to'liq kunlar; obuna yo'q bo'lsa None."""
@@ -172,7 +229,11 @@ class Driver(Base):
     def is_access_valid(self, now: datetime | None = None) -> bool:
         """Buyurtma olish huquqi: bloklanmagan; muddati o'tgan to'langan obuna bo'lmasin."""
         now = now or utcnow()
-        if self.status == DriverStatus.BANNED.value:
+        if self.status in {
+            DriverStatus.BANNED.value,
+            DriverStatus.PENDING.value,
+            DriverStatus.REJECTED.value,
+        }:
             return False
         if self.has_paid_subscription(now):
             return True
@@ -429,6 +490,54 @@ async def init_db() -> None:
                             f"BOOLEAN DEFAULT {bool_default}"
                         )
                     )
+
+            # Profil kengaytmasi + bir martalik legacy tasdiqlash.
+            # car_color birinchi marta qo'shilganda: mavjud haydovchilar
+            # pending/rejected bo'lmasin — active (yoki expired saqlanadi).
+            # Qayta ishga tushishda ustun bor → statusga tegilmaydi (idempotent).
+            legacy_activation = "car_color" not in driver_cols
+            profile_columns: list[tuple[str, str]] = [
+                ("car_color", "VARCHAR(64)"),
+                ("seats_count", "INTEGER"),
+                ("photo_file_id", "VARCHAR(256)"),
+            ]
+            for col_name, col_type in profile_columns:
+                if col_name not in driver_cols:
+                    sync_conn.execute(
+                        text(f"ALTER TABLE drivers ADD COLUMN {col_name} {col_type}")
+                    )
+            if legacy_activation:
+                # Faqat "noma'lum" statuslarni active qiladi.
+                # banned/expired/active/pending/rejected ga tegilmaydi —
+                # deploy paytida pending hali yo'q; keyingi ishga tushishda
+                # legacy_activation=False bo'lgani uchun yangi arizalar saqlanadi.
+                sync_conn.execute(
+                    text(
+                        """
+                        UPDATE drivers
+                        SET status = 'active'
+                        WHERE status IS NULL
+                           OR TRIM(status) = ''
+                           OR LOWER(status) NOT IN (
+                                'active', 'expired', 'banned', 'pending', 'rejected'
+                           )
+                        """
+                    )
+                )
+                # Mavjud qatorlar (banned emas) — tasdiqlangan hisoblanadi.
+                # pending/rejected deploydan KEYIN paydo bo'ladi; shu birinchi
+                # migratsiyada ular yo'q. Shuning uchun non-banned → kamida active
+                # emas, balki faqat yuqoridagi "noma'lum" tozalanadi.
+                # Qo'shimcha: agar status 'trial' kabi eski qiymat bo'lsa active.
+                sync_conn.execute(
+                    text(
+                        """
+                        UPDATE drivers
+                        SET status = 'active'
+                        WHERE LOWER(COALESCE(status, '')) IN ('trial', 'registered', 'ok')
+                        """
+                    )
+                )
 
             order_cols = {col["name"] for col in inspect(sync_conn).get_columns("orders")}
             if "group_posts" not in order_cols:

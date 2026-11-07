@@ -111,6 +111,31 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
     )
 
 
+def driver_approval_kb(driver_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Tasdiqlash",
+                    callback_data=f"drv_approve:{driver_id}",
+                ),
+                InlineKeyboardButton(
+                    text="❌ Rad etish",
+                    callback_data=f"drv_reject:{driver_id}",
+                ),
+            ]
+        ]
+    )
+
+
+def skip_optional_kb(prefix: str = "drvskip") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data=f"{prefix}:skip")]
+        ]
+    )
+
+
 def admin_leaderboard_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

@@ -14,9 +14,18 @@ from aiogram.types import CallbackQuery, Message, TelegramObject
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
-from bot.database.db_requests import extend_subscription, get_driver, get_stats, list_drivers
+from bot.database.db_requests import (
+    approve_driver,
+    block_driver,
+    extend_subscription,
+    get_driver,
+    get_stats,
+    list_drivers,
+    reject_driver,
+    unblock_driver,
+)
 from bot.database.models import DriverStatus
-from bot.keyboards.default_kb import BTN_CANCEL, main_menu_kb
+from bot.keyboards.default_kb import BTN_CANCEL, driver_panel_kb, main_menu_kb
 from bot.keyboards.inline_kb import admin_leaderboard_kb, admin_menu_kb
 from bot.relay.detect import normalize
 from bot.relay.service import groups_overview
@@ -80,10 +89,18 @@ def _driver_line(driver) -> str:
         until = f" · obuna: {_fmt_dt(driver.subscription_until)}"
     left = driver.subscription_days_left()
     left_s = f" · {left} kun qoldi" if left is not None else ""
+    missing = driver.missing_field_labels()
+    miss_s = (
+        f"\n   ⚠️ Yetishmayapti: {', '.join(missing)}"
+        if missing
+        else "\n   ✅ Profil to'liq"
+    )
     return (
         f"{paid} <code>{driver.telegram_id}</code> {driver.full_name}\n"
-        f"   {driver.car_model} {driver.car_number} · {status}{until}{left_s}\n"
+        f"   {driver.car_model or '—'} {driver.car_number or '—'} · {status}{until}{left_s}\n"
+        f"   📞 {driver.phone or '—'}\n"
         f"   📅 Qo'shilgan: {_fmt_dt(driver.created_at)}"
+        f"{miss_s}"
     )
 
 
@@ -130,8 +147,133 @@ async def cmd_drivers(message: Message, session: AsyncSession) -> None:
     if not drivers:
         await message.answer("Haydovchilar yo'q.")
         return
-    text = "🚘 <b>Haydovchilar</b> (vaqt bilan)\n\n" + "\n".join(_driver_line(d) for d in drivers)
-    await message.answer(text[:4000])
+    chunks: list[str] = []
+    buf = "🚘 <b>Haydovchilar</b>\n"
+    for d in drivers:
+        line = "\n" + _driver_line(d)
+        if len(buf) + len(line) > 3900:
+            chunks.append(buf)
+            buf = line.lstrip()
+        else:
+            buf += line
+    chunks.append(buf)
+    for chunk in chunks:
+        await message.answer(chunk)
+
+
+@router.message(Command("block"))
+async def cmd_block(message: Message, session: AsyncSession) -> None:
+    parts = (message.text or "").split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await message.answer("Format: <code>/block 123456789</code>")
+        return
+    driver_id = int(parts[1])
+    driver = await block_driver(session, driver_id)
+    await session.commit()
+    if driver is None:
+        await message.answer("Haydovchi topilmadi.")
+        return
+    await message.answer(f"🚫 Bloklandi: {driver.full_name} (<code>{driver_id}</code>)")
+    try:
+        await message.bot.send_message(
+            driver_id,
+            "⛔ Profilingiz admin tomonidan bloklandi. Savol bo'lsa admin bilan bog'laning.",
+            reply_markup=main_menu_kb(),
+        )
+    except (TelegramForbiddenError, TelegramBadRequest):
+        pass
+
+
+@router.message(Command("unblock"))
+async def cmd_unblock(message: Message, session: AsyncSession) -> None:
+    parts = (message.text or "").split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await message.answer("Format: <code>/unblock 123456789</code>")
+        return
+    driver_id = int(parts[1])
+    driver = await unblock_driver(session, driver_id)
+    await session.commit()
+    if driver is None:
+        await message.answer("Haydovchi topilmadi.")
+        return
+    await message.answer(f"✅ Blokdan chiqarildi: {driver.full_name} (<code>{driver_id}</code>)")
+    try:
+        await message.bot.send_message(
+            driver_id,
+            "✅ Profilingiz qayta faollashtirildi.",
+            reply_markup=driver_panel_kb(),
+        )
+    except (TelegramForbiddenError, TelegramBadRequest):
+        pass
+
+
+@router.callback_query(F.data.startswith("drv_approve:"))
+async def cb_approve_driver(callback: CallbackQuery, session: AsyncSession) -> None:
+    if not callback.data:
+        await callback.answer()
+        return
+    try:
+        driver_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
+    driver = await approve_driver(session, driver_id)
+    await session.commit()
+    if driver is None:
+        await callback.answer("Haydovchi topilmadi.", show_alert=True)
+        return
+    if driver.status == DriverStatus.BANNED.value:
+        await callback.answer("Bloklangan — avval /unblock.", show_alert=True)
+        return
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await callback.message.answer(
+        f"✅ Tasdiqlandi: {driver.full_name} (<code>{driver_id}</code>)"
+    )
+    try:
+        await callback.bot.send_message(
+            driver_id,
+            "🎉 Arizangiz tasdiqlandi! Haydovchi paneli ochildi.",
+            reply_markup=driver_panel_kb(),
+        )
+    except (TelegramForbiddenError, TelegramBadRequest):
+        await callback.message.answer("Haydovchiga yozib bo'lmadi.")
+    await callback.answer("Tasdiqlandi.")
+
+
+@router.callback_query(F.data.startswith("drv_reject:"))
+async def cb_reject_driver(callback: CallbackQuery, session: AsyncSession) -> None:
+    if not callback.data:
+        await callback.answer()
+        return
+    try:
+        driver_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Noto'g'ri so'rov.", show_alert=True)
+        return
+    driver = await reject_driver(session, driver_id)
+    await session.commit()
+    if driver is None:
+        await callback.answer("Haydovchi topilmadi.", show_alert=True)
+        return
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await callback.message.answer(
+        f"❌ Rad etildi: {driver.full_name} (<code>{driver_id}</code>)"
+    )
+    try:
+        await callback.bot.send_message(
+            driver_id,
+            "Arizangiz rad etildi. Savol bo'lsa admin bilan bog'laning.",
+            reply_markup=main_menu_kb(),
+        )
+    except (TelegramForbiddenError, TelegramBadRequest):
+        pass
+    await callback.answer("Rad etildi.")
 
 
 @router.message(Command("extend"))

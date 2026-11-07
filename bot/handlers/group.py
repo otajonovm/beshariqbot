@@ -239,8 +239,8 @@ async def _maybe_remind_profile(bot: Bot, session: AsyncSession, user_id: int) -
         await bot.send_message(
             user_id,
             "ℹ️ Profilingiz hali to'liq emas.\n"
-            "Botda <b>🚘 Haydovchi sifatida ulanish</b> tugmasini bosib "
-            "ism, mashina va telefonni to'ldiring.",
+            "Botda <b>👤 Profilim</b> yoki <b>📢 E'lon berish</b> orqali "
+            "faqat yetishmayotgan maydonlarni to'ldiring.",
         )
     except TelegramForbiddenError:
         pass

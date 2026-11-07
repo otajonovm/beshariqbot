@@ -6,13 +6,13 @@ import logging
 import re
 
 from aiogram import F, Router
-from aiogram.filters import CommandObject, CommandStart
+from aiogram.filters import CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.database.db_requests import create_order, upsert_user
-from bot.database.models import DIRECTION_LABELS, OrderType
+from bot.database.db_requests import create_order, get_driver, upsert_user
+from bot.database.models import DIRECTION_LABELS, DriverStatus, OrderType
 from bot.keyboards.default_kb import (
     BTN_BT,
     BTN_CANCEL,
@@ -23,7 +23,7 @@ from bot.keyboards.default_kb import (
     main_menu_kb,
 )
 from bot.keyboards.inline_kb import seats_kb, skip_photo_kb
-from bot.states.order_states import ParcelOrder, TaxiOrder
+from bot.states.order_states import DriverAnnounce, ParcelOrder, TaxiOrder
 
 logger = logging.getLogger(__name__)
 router = Router(name="passenger")
@@ -94,6 +94,27 @@ async def cmd_start(
         await message.answer(result_text, reply_markup=main_menu_kb())
         return
 
+    # Mavjud tasdiqlangan haydovchi — qayta ro'yxat YO'Q, darhol panel.
+    driver = await get_driver(session, user.id)
+    if driver is not None and driver.is_legacy_or_approved() and driver.is_access_valid():
+        from bot.handlers.driver import show_driver_panel
+
+        await message.answer(
+            "Assalomu alaykum!\n"
+            "<b>Karvon Taxi</b> — haydovchi paneli."
+        )
+        await show_driver_panel(message, driver)
+        return
+    if driver is not None and driver.status == DriverStatus.PENDING.value:
+        await message.answer(
+            "Assalomu alaykum!\n\n"
+            "⏳ Haydovchi arizangiz ko'rib chiqilmoqda.\n"
+            "Tasdiqlangach panel avtomatik ochiladi.\n\n"
+            "Hozircha yo'lovchi sifatida buyurtma berishingiz mumkin:",
+            reply_markup=main_menu_kb(),
+        )
+        return
+
     await message.answer(
         "Assalomu alaykum!\n\n"
         "<b>Karvon Taxi: Beshariq — Toshkent</b>\n"
@@ -111,7 +132,7 @@ async def cancel_flow(message: Message, state: FSMContext) -> None:
     await _cancel_fsm(message, state)
 
 
-@router.message(F.text.in_({BTN_BT, BTN_TB}))
+@router.message(F.text.in_({BTN_BT, BTN_TB}), ~StateFilter(DriverAnnounce.direction))
 async def on_direction_button(message: Message, state: FSMContext) -> None:
     direction = DIRECTION_BY_BTN[message.text or ""]
     label = _route_label(direction)

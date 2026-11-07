@@ -2,6 +2,32 @@
 
 Aiogram 3 dagi bot. Hosting: **Railway**. Buyurtma, haydovchi va admin oqimlari o'z holicha qoladi. Quyidagi bo'lim guruhlardagi yo'lovchi xabarini **426. Global** asosiy guruhga zudlik bilan olib o'tadi.
 
+## Deploy oldidan: DB zaxira nusxasi (majburiy)
+
+Yangi haydovchi profil/migratsiya o'zgarishlarini chiqarishdan **oldin** bazani zaxiralang. Mavjud haydovchilar o'chirilmaydi va qayta to'liq ro'yxatdan o'tkazilmaydi; shunga qaramay zaxira shart.
+
+**Postgres (Railway):**
+
+```bash
+# Lokalga dump
+railway connect Postgres
+# yoki
+pg_dump "$DATABASE_URL" -Fc -f backup_$(date +%Y%m%d).dump
+
+# Tiklash (kerak bo'lsa)
+pg_restore -d "$DATABASE_URL" --clean --if-exists backup_YYYYMMDD.dump
+```
+
+**SQLite (faqat lokal):**
+
+```bash
+copy data\bot.db data\bot.db.bak
+# yoki
+cp data/bot.db "data/bot.db.bak.$(date +%Y%m%d)"
+```
+
+Migratsiya idempotent: qayta ishga tushganda dublikat yaratmaydi va mavjud telefon/mashina maydonlarini ustidan yozmaydi. Mavjud haydovchilar `active`/`expired` holatida qoladi; faqat **yangi** arizalar admin tasdig'ini kutadi (`/drivers`, `/block`, `/unblock`).
+
 ## Guruhdan asosiy guruhga tezkor yo'naltirish
 
 Bot admin bo'lgan guruhda odam taksi so'rasa (`taksi kerak`, `Toshkentga ketaman`, `такси нужно`, `1 kishi` va shu kabilar), bot shu xabarni asosiy guruhga karta qilib yuboradi. Haydovchi e'lonlari (`joy bor`, `Cobalt bo'sh`, `свободно`) va reklama havolalari o'tkazilmaydi.

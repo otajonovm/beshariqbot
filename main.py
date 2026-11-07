@@ -156,6 +156,9 @@ async def _set_admin_commands(bot: Bot) -> None:
     commands = [
         BotCommand(command="admin", description="Admin panel"),
         BotCommand(command="stats", description="Statistika va yo'naltirish"),
+        BotCommand(command="drivers", description="Haydovchilar va yetishmagan maydonlar"),
+        BotCommand(command="block", description="Haydovchini bloklash"),
+        BotCommand(command="unblock", description="Blokdan chiqarish"),
         BotCommand(command="groups", description="Ulangan guruhlar"),
         BotCommand(command="addword", description="Kalit so'z qo'shish"),
         BotCommand(command="delword", description="Kalit so'z o'chirish"),
@@ -314,8 +317,9 @@ async def main() -> None:
     # Relay birinchi: yuborish DbSession ochilishidan oldin bajariladi.
     dp.update.outer_middleware(RelayMiddleware())
     dp.update.outer_middleware(DbSessionMiddleware())
-    dp.include_router(passenger_router)
+    # driver passenger dan oldin: e'lon yo'nalishi tugmalari chalkashmasin
     dp.include_router(driver_router)
+    dp.include_router(passenger_router)
     dp.include_router(group_router)
     dp.include_router(admin_router)
 
