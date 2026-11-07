@@ -256,6 +256,22 @@ async def sweep_message(message: Message, bot: Bot) -> bool:
     if await admin_cache.is_admin(bot, chat.id, user.id):
         return True
 
+    # Faqat yo'lovchi so'rovi o'tadi — haydovchi/taksi e'loni 426 ga tushmasin.
+    decision = classify(
+        body,
+        max_chars=settings.relay_max_chars,
+        min_score=settings.relay_min_score,
+    )
+    if not decision.accept:
+        logger.debug(
+            "sweep skip driver/other chat=%s p=%s d=%s reason=%s",
+            chat.id,
+            decision.passenger,
+            decision.driver,
+            decision.reason,
+        )
+        return True
+
     # Xabar ID bo'yicha dublikat; matn dedup sweepda yo'q — har biri o'tadi.
     duplicate = dedup.claim(
         chat.id,

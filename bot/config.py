@@ -12,9 +12,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = BASE_DIR / ".env"
 DATA_DIR = BASE_DIR / "data"
 
-DEFAULT_GROUP_IDS = "-1003956911813,-1002296741378,-1003189462638,-1002200785842"
+DEFAULT_GROUP_IDS = (
+    "-1003956911813,-1004421198641,-1002296741378,-1003189462638,-1002200785842"
+)
 PRIMARY_GROUP_ID = -1003956911813
 PRIMARY_GROUP_INVITE = "https://t.me/+nsAZI5HKm4E5OWYy"
+# Bo'sh = SUPERGROUP_IDS dan 426. Global (PRIMARY) ni chiqarib tashlash.
+# 426 — faqat yo'lovchi/taksi hub; haydovchi e'loni u yerga tushmaydi.
+DEFAULT_DRIVER_POST_GROUP_IDS = ""
 
 
 class Settings(BaseSettings):
@@ -51,6 +56,12 @@ class Settings(BaseSettings):
     source_group_ids: str = Field(default="")
     # Admin bo'lmaganlarning xabari o'chirilib asosiy guruhga o'tkaziladi.
     sweep_group_ids: str = Field(default="-1003189462638")
+    # Haydovchi e'lonlari (xom + wizard). Bo'sh = barcha SUPERGROUP_IDS minus 426. Global.
+    driver_post_group_ids: str = Field(default=DEFAULT_DRIVER_POST_GROUP_IDS)
+    # Lichkadagi matn/forward uchun oldindan ko'rish (✅/❌).
+    driver_raw_confirm: bool = Field(default=True)
+    # Soatiga nechta xom/wizard e'lon (spam limati).
+    driver_post_limit_per_hour: int = Field(default=20)
     dedup_minutes: int = Field(default=10)
     relay_min_score: int = Field(default=3)
     relay_max_chars: int = Field(default=400)
@@ -71,6 +82,7 @@ class Settings(BaseSettings):
         "supergroup_ids",
         "source_group_ids",
         "sweep_group_ids",
+        "driver_post_group_ids",
         "use_webhook",
         "webhook_url",
         mode="before",
@@ -134,6 +146,43 @@ class Settings(BaseSettings):
             ids = [primary] + [item for item in ids if item != primary]
         elif primary:
             ids.insert(0, primary)
+        return ids
+
+    @staticmethod
+    def _normalize_chat_id(raw: str) -> int | None:
+        """4421198641 → -1004421198641 (superguruh)."""
+        part = raw.strip()
+        if not part:
+            return None
+        try:
+            value = int(part)
+        except ValueError:
+            return None
+        # Musbat yoki qisqa ID — Telegram superguruh shakliga keltirish
+        if value > 0:
+            value = int(f"-100{value}")
+        elif value > -1000000000000 and not str(value).startswith("-100"):
+            # masalan -4421198641
+            value = int(f"-100{abs(value)}")
+        return value
+
+    @property
+    def resolved_driver_post_group_ids(self) -> list[int]:
+        """Haydovchi e'lonlari: ulangan guruhlar, 426. Global (PRIMARY) dan tashqari.
+
+        Bo'sh DRIVER_POST_GROUP_IDS → SUPERGROUP_IDS / group_ids minus primary.
+        Aniq ro'yxat berilsa — shu; primary baribir chiqariladi.
+        """
+        primary = self.primary_group_id
+        raw = (self.driver_post_group_ids or "").strip()
+        if not raw or raw == "*":
+            return [cid for cid in self.group_ids if cid != primary]
+        ids: list[int] = []
+        for part in raw.split(","):
+            value = self._normalize_chat_id(part)
+            if value is None or value in ids or value == primary:
+                continue
+            ids.append(value)
         return ids
 
     @property

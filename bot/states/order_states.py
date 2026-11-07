@@ -37,6 +37,12 @@ class DriverAnnounce(StatesGroup):
     free_seats = State()
 
 
+class DriverRawPost(StatesGroup):
+    """Lichkadagi xom e'lon — oldindan ko'rish / tasdiq."""
+
+    confirm = State()
+
+
 class AdminExtend(StatesGroup):
     driver_id = State()
     days = State()

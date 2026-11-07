@@ -102,6 +102,12 @@ DRIVERS = [
     "Beshariq Toshkent",
     "hozir chiqaman",
     "2 kishi kerak",
+    # Tipik haydovchi e'lonlari — 426 ga o'tmasin
+    "Beshariq Toshkent Cobalt 3 joy 90 111 22 33",
+    "Toshkentga ketamiz 2 joy Malibu",
+    "Nexia bosh joylar bor narxi 200 ming",
+    "40 A 123 BA Gentra Toshkentga",
+    "Bot orqali\nCobalt joy bor",
 ]
 
 

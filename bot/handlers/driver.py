@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.filters import Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,10 +39,12 @@ from bot.keyboards.default_kb import (
     BTN_DRIVER_GROUPS,
     BTN_PASSENGER_MENU,
     BTN_PROFILE,
+    BTN_REPEAT_LAST,
     BTN_SKIP,
     BTN_TB,
     DIRECTION_BY_BTN,
     DRIVER_START_BUTTONS,
+    RESERVED_PRIVATE_TEXTS,
     cancel_kb,
     contact_kb,
     driver_panel_kb,
@@ -52,9 +56,21 @@ from bot.keyboards.inline_kb import (
     claim_kb,
     driver_approval_kb,
     group_invite_kb,
+    raw_post_confirm_kb,
+)
+from bot.services.driver_raw_post import (
+    RawPayload,
+    check_post_limit,
+    compose_body,
+    format_result,
+    get_last_raw,
+    post_to_main,
+    post_to_rest,
+    record_post,
+    save_last_raw,
 )
 from bot.services.notify import notify_admins
-from bot.states.order_states import DriverAnnounce, DriverMissing, DriverReg
+from bot.states.order_states import DriverAnnounce, DriverMissing, DriverRawPost, DriverReg
 
 logger = logging.getLogger(__name__)
 router = Router(name="driver")
@@ -105,6 +121,24 @@ def _normalize_plate(raw: str) -> str | None:
     return number
 
 
+def _panel_kb(driver: Driver | int | None = None) -> "ReplyKeyboardMarkup":
+    if isinstance(driver, Driver):
+        uid = driver.telegram_id
+    elif isinstance(driver, int):
+        uid = driver
+    else:
+        uid = None
+    has_last = bool(uid and get_last_raw(uid))
+    return driver_panel_kb(has_last=has_last)
+
+
+def driver_guide_text() -> str:
+    return (
+        "💡 <b>E'lon matnini shu yerga tashlang</b> — bot barcha guruhlarga yuboradi.\n"
+        "Yoki «📢 E'lon berish» tugmasidan foydalaning."
+    )
+
+
 async def show_driver_panel(message: Message, driver: Driver) -> None:
     extra = (
         f"📅 Obuna: {_fmt_until(driver.subscription_until)}"
@@ -122,8 +156,9 @@ async def show_driver_panel(message: Message, driver: Driver) -> None:
         f"🚘 {driver.car_model or '—'} · {driver.car_number or '—'}\n"
         f"📞 {driver.phone or '—'}\n"
         f"{extra}{miss_line}\n\n"
+        f"{driver_guide_text()}\n\n"
         f"⭐ Asosiy guruh: <b>{settings.primary_group_title}</b>",
-        reply_markup=driver_panel_kb(),
+        reply_markup=_panel_kb(driver),
     )
 
 
@@ -153,6 +188,7 @@ async def _finish_missing_flow(
 ) -> None:
     data = await state.get_data()
     resume = data.get("resume_action")
+    pending_raw = data.get("pending_raw")
     await state.clear()
     user = message.from_user
     if user is None:
@@ -165,10 +201,23 @@ async def _finish_missing_flow(
         if driver.missing_required_fields():
             await message.answer(
                 "Majburiy maydonlar hali to'liq emas.",
-                reply_markup=driver_panel_kb(),
+                reply_markup=_panel_kb(driver),
             )
             return
         await _start_announce(message, state)
+        return
+    if resume == "raw" and isinstance(pending_raw, dict):
+        if driver.missing_required_fields():
+            await message.answer(
+                "Majburiy maydonlar hali to'liq emas.",
+                reply_markup=_panel_kb(driver),
+            )
+            return
+        payload = RawPayload(
+            text=str(pending_raw.get("text") or ""),
+            photo_file_id=pending_raw.get("photo_file_id"),
+        )
+        await _offer_or_send_raw(message, state, session, driver, payload)
         return
     await show_driver_panel(message, driver)
 
@@ -179,17 +228,20 @@ async def ensure_required_or_ask(
     driver: Driver,
     *,
     resume_action: str,
+    extra_data: dict | None = None,
 ) -> bool:
     """True = hammasi joyida. False = so'rov boshlandi."""
     missing = driver.missing_required_fields()
     if not missing:
         return True
+    keep = dict(extra_data or {})
     await state.clear()
     await state.set_state(DriverMissing.collecting)
     await state.update_data(
         missing_queue=missing,
         missing_optional=False,
         resume_action=resume_action,
+        **keep,
     )
     labels = ", ".join(DRIVER_FIELD_LABELS[k] for k in missing)
     await message.answer(
@@ -321,14 +373,16 @@ async def announce_direction(message: Message, state: FSMContext) -> None:
 @router.message(DriverAnnounce.direction, F.text == BTN_CANCEL)
 async def announce_dir_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer("Bekor qilindi.", reply_markup=driver_panel_kb())
+    uid = message.from_user.id if message.from_user else None
+    await message.answer("Bekor qilindi.", reply_markup=_panel_kb(uid))
 
 
 @router.message(DriverAnnounce.free_seats, F.text)
 async def announce_seats(message: Message, state: FSMContext, session: AsyncSession) -> None:
     if message.text == BTN_CANCEL:
         await state.clear()
-        await message.answer("Bekor qilindi.", reply_markup=driver_panel_kb())
+        uid = message.from_user.id if message.from_user else None
+        await message.answer("Bekor qilindi.", reply_markup=_panel_kb(uid))
         return
     seats = (message.text or "").strip()
     if len(seats) < 1 or len(seats) > 40:
@@ -339,7 +393,7 @@ async def announce_seats(message: Message, state: FSMContext, session: AsyncSess
     user = message.from_user
     if user is None or not direction:
         await state.clear()
-        await message.answer("Xatolik. Qaytadan urinib ko'ring.", reply_markup=driver_panel_kb())
+        await message.answer("Xatolik. Qaytadan urinib ko'ring.", reply_markup=_panel_kb())
         return
     driver = await get_driver(session, user.id)
     if driver is None:
@@ -358,7 +412,7 @@ async def announce_seats(message: Message, state: FSMContext, session: AsyncSess
         f"📞 <code>{driver.phone}</code>"
     )
     posted = 0
-    for chat_id in settings.group_ids:
+    for chat_id in settings.resolved_driver_post_group_ids:
         try:
             if driver.photo_file_id:
                 await message.bot.send_photo(
@@ -374,13 +428,251 @@ async def announce_seats(message: Message, state: FSMContext, session: AsyncSess
     if posted:
         await message.answer(
             f"✅ E'lon {posted} ta guruhga yuborildi.",
-            reply_markup=driver_panel_kb(),
+            reply_markup=_panel_kb(driver),
         )
     else:
         await message.answer(
             "E'lon yuborilmadi. Bot guruhlarda admin ekanini tekshiring.",
-            reply_markup=driver_panel_kb(),
+            reply_markup=_panel_kb(driver),
         )
+
+
+# ----- Xom e'lon: lichkaga matn / forward / rasm -----
+
+
+def _extract_raw_payload(message: Message) -> RawPayload | None:
+    """Forward header'siz matn/caption (+ ixtiyoriy rasm)."""
+    text = (message.text or message.caption or "").strip()
+    photo_id = message.photo[-1].file_id if message.photo else None
+    if not text and not photo_id:
+        return None
+    return RawPayload(text=text, photo_file_id=photo_id)
+
+
+async def _active_driver_or_none(
+    message: Message,
+    session: AsyncSession,
+) -> Driver | None:
+    user = message.from_user
+    if user is None:
+        return None
+    driver = await get_driver(session, user.id)
+    if driver is None:
+        return None
+    if not driver.is_legacy_or_approved() or not driver.is_access_valid():
+        return None
+    return driver
+
+
+async def _offer_or_send_raw(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    driver: Driver,
+    payload: RawPayload,
+) -> None:
+    allowed, wait_sec = check_post_limit(driver.telegram_id)
+    if not allowed:
+        mins = max(1, (wait_sec + 59) // 60)
+        await message.answer(
+            f"⏳ Soatlik limit ({settings.driver_post_limit_per_hour} ta) to'ldi.\n"
+            f"Taxminan <b>{mins}</b> daqiqadan keyin qayta urinib ko'ring.",
+            reply_markup=_panel_kb(driver),
+        )
+        return
+
+    if settings.driver_raw_confirm:
+        await state.set_state(DriverRawPost.confirm)
+        await state.update_data(
+            raw_text=payload.text,
+            raw_photo=payload.photo_file_id,
+        )
+        preview = compose_body(payload.text, driver, for_caption=bool(payload.photo_file_id))
+        header = "👀 <b>Oldindan ko'rish</b>\nGuruhlarga shunday chiqadi:\n\n"
+        if payload.photo_file_id:
+            await message.answer_photo(
+                photo=payload.photo_file_id,
+                caption=(header + (preview or "📷")).strip()[:1024],
+                reply_markup=raw_post_confirm_kb(),
+            )
+        else:
+            await message.answer(
+                header + (preview or "—"),
+                reply_markup=raw_post_confirm_kb(),
+            )
+        await message.answer(
+            "Tasdiqlang yoki bekor qiling.",
+            reply_markup=_panel_kb(driver),
+        )
+        return
+
+    await _dispatch_raw(message, state, driver, payload)
+
+
+async def _dispatch_raw(
+    message: Message,
+    state: FSMContext,
+    driver: Driver,
+    payload: RawPayload,
+) -> None:
+    await state.clear()
+    bot = message.bot
+    chat_id = message.chat.id
+
+    ok: list[int] = []
+    failed: list[tuple[int, str]] = []
+    main_id, main_err = await post_to_main(bot, driver, payload)
+    if main_id is not None and main_err is None:
+        ok.append(main_id)
+    elif main_id is not None:
+        failed.append((main_id, main_err or "xato"))
+
+    async def _rest() -> None:
+        skip = {main_id} if main_id is not None else set()
+        rest_ok, rest_fail = await post_to_rest(
+            bot, driver, payload, skip_chat_ids=skip
+        )
+        all_ok = ok + rest_ok
+        all_fail = failed + rest_fail
+        if all_ok:
+            save_last_raw(driver.telegram_id, payload)
+            record_post(driver.telegram_id)
+        await bot.send_message(
+            chat_id,
+            format_result(all_ok, all_fail),
+            reply_markup=_panel_kb(driver),
+        )
+
+    asyncio.create_task(_rest(), name=f"raw-post-{driver.telegram_id}")
+
+
+@router.message(F.text == BTN_REPEAT_LAST)
+async def on_repeat_last(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    driver = await _active_driver_or_none(message, session)
+    if driver is None:
+        await message.answer(
+            "Avval haydovchi sifatida ro'yxatdan o'ting.",
+            reply_markup=main_menu_kb(),
+        )
+        return
+    last = get_last_raw(driver.telegram_id)
+    if last is None:
+        await message.answer(
+            "Hali xom e'lon yuborilmagan. Matnni shu yerga tashlang.",
+            reply_markup=_panel_kb(driver),
+        )
+        return
+    if not await ensure_required_or_ask(
+        message,
+        state,
+        driver,
+        resume_action="raw",
+        extra_data={
+            "pending_raw": {
+                "text": last.text,
+                "photo_file_id": last.photo_file_id,
+            }
+        },
+    ):
+        return
+    await _offer_or_send_raw(message, state, session, driver, last)
+
+
+@router.message(DriverRawPost.confirm, F.text == BTN_CANCEL)
+async def raw_confirm_cancel_btn(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    uid = message.from_user.id if message.from_user else None
+    await message.answer("Bekor qilindi.", reply_markup=_panel_kb(uid))
+
+
+@router.message(DriverRawPost.confirm, F.text | F.photo)
+async def raw_confirm_waiting(message: Message) -> None:
+    await message.answer("Pastdagi ✅ yoki ❌ tugmasini bosing.")
+
+
+@router.callback_query(DriverRawPost.confirm, F.data == "rawpost:cancel")
+async def raw_post_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    uid = callback.from_user.id if callback.from_user else None
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await callback.message.answer("Bekor qilindi.", reply_markup=_panel_kb(uid))
+    await callback.answer("Bekor qilindi")
+
+
+@router.callback_query(DriverRawPost.confirm, F.data == "rawpost:ok")
+async def raw_post_ok(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = callback.from_user
+    if user is None:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    payload = RawPayload(
+        text=str(data.get("raw_text") or ""),
+        photo_file_id=data.get("raw_photo"),
+    )
+    if not payload.text and not payload.photo_file_id:
+        await state.clear()
+        await callback.answer("E'lon topilmadi.", show_alert=True)
+        return
+
+    driver = await get_driver(session, user.id)
+    if driver is None or not driver.is_legacy_or_approved() or not driver.is_access_valid():
+        await state.clear()
+        await callback.answer("Ruxsat yo'q.", show_alert=True)
+        return
+
+    allowed, wait_sec = check_post_limit(driver.telegram_id)
+    if not allowed:
+        mins = max(1, (wait_sec + 59) // 60)
+        await state.clear()
+        await callback.answer(f"Limit. ~{mins} daqiqa kuting.", show_alert=True)
+        return
+
+    await state.clear()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+
+    bot = callback.bot
+    chat_id = callback.message.chat.id if callback.message else user.id
+
+    ok: list[int] = []
+    failed: list[tuple[int, str]] = []
+    main_id, main_err = await post_to_main(bot, driver, payload)
+    if main_id is not None and main_err is None:
+        ok.append(main_id)
+        await callback.answer("Asosiy guruhga yuborildi")
+    elif main_id is not None:
+        failed.append((main_id, main_err or "xato"))
+        await callback.answer("Asosiy guruhda xato", show_alert=True)
+    else:
+        await callback.answer("Guruhlar yo'q", show_alert=True)
+
+    async def _rest() -> None:
+        skip = {main_id} if main_id is not None else set()
+        rest_ok, rest_fail = await post_to_rest(
+            bot, driver, payload, skip_chat_ids=skip
+        )
+        all_ok = ok + rest_ok
+        all_fail = failed + rest_fail
+        if all_ok:
+            save_last_raw(driver.telegram_id, payload)
+            record_post(driver.telegram_id)
+        await bot.send_message(
+            chat_id,
+            format_result(all_ok, all_fail),
+            reply_markup=_panel_kb(driver),
+        )
+
+    asyncio.create_task(_rest(), name=f"raw-post-{driver.telegram_id}")
 
 
 @router.message(F.text == BTN_PROFILE)
@@ -414,7 +706,7 @@ async def on_profile(message: Message, state: FSMContext, session: AsyncSession)
             "\nIxtiyoriy to'ldirilmagan: "
             + ", ".join(DRIVER_FIELD_LABELS[k] for k in opt)
         )
-    await message.answer("\n".join(lines), reply_markup=driver_panel_kb())
+    await message.answer("\n".join(lines), reply_markup=_panel_kb(driver))
     fill_queue = req + opt
     if fill_queue:
         await state.set_state(DriverMissing.collecting)
@@ -507,7 +799,7 @@ async def missing_text(message: Message, state: FSMContext, session: AsyncSessio
     text = (message.text or "").strip()
     if text == BTN_CANCEL:
         await state.clear()
-        await message.answer("Bekor qilindi.", reply_markup=driver_panel_kb())
+        await message.answer("Bekor qilindi.", reply_markup=_panel_kb(user.id))
         return
 
     data = await state.get_data()
@@ -776,6 +1068,70 @@ async def _finish_new_application(
             f"📞 Telefon: <code>{driver.phone}</code>",
             reply_markup=driver_approval_kb(user.id),
         )
+
+
+# ----- Xom e'lon catch-all (barcha panel/FSM handlerlardan keyin) -----
+
+
+class _ActiveRawPostFilter(Filter):
+    """Faqat active haydovchi + bo'sh FSM + tugma/buyruq emas — aks holda event o'tadi."""
+
+    async def __call__(
+        self,
+        message: Message,
+        session: AsyncSession,
+        state: FSMContext,
+    ) -> bool:
+        if await state.get_state() is not None:
+            return False
+        if message.from_user is None:
+            return False
+        text = (message.text or "").strip()
+        if text.startswith("/"):
+            return False
+        if text in RESERVED_PRIVATE_TEXTS:
+            return False
+        has_photo = bool(message.photo)
+        body = (message.text or message.caption or "").strip()
+        if not has_photo and not body:
+            return False
+        if not has_photo and len(body) < 3:
+            return False
+        driver = await get_driver(session, message.from_user.id)
+        if driver is None:
+            return False
+        if not driver.is_legacy_or_approved() or not driver.is_access_valid():
+            return False
+        return True
+
+
+@router.message(_ActiveRawPostFilter(), F.text | F.photo | F.caption)
+async def on_raw_driver_post(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    """Lichkadagi oddiy matn / forward / rasm+caption → e'lon."""
+    driver = await _active_driver_or_none(message, session)
+    if driver is None:
+        return
+    payload = _extract_raw_payload(message)
+    if payload is None:
+        return
+    if not await ensure_required_or_ask(
+        message,
+        state,
+        driver,
+        resume_action="raw",
+        extra_data={
+            "pending_raw": {
+                "text": payload.text,
+                "photo_file_id": payload.photo_file_id,
+            }
+        },
+    ):
+        return
+    await _offer_or_send_raw(message, state, session, driver, payload)
 
 
 # ----- Deal callbacks (eski oqim) -----

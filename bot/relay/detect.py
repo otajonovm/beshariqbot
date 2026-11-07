@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 
 from bot.relay.keywords import (
+    DRIVER_HARD_BLOCK,
     DRIVER_PHRASES,
     DRIVER_REGEX,
     MAX_CHARS,
@@ -235,6 +236,9 @@ def classify(
     driver_re, driver_w = _driver
     passenger = _sum_literals(passenger_re, passenger_w, norm) + _sum_regex(_PASSENGER_REGEX, norm)
     driver = _sum_literals(driver_re, driver_w, norm) + _sum_regex(_DRIVER_REGEX, norm)
+    # Kuchli haydovchi e'loni (joy/mashina/narx/raqam) — 426 ga o'tmasin
+    if driver >= DRIVER_HARD_BLOCK:
+        return Decision(False, passenger, driver, norm, phones, "driver")
     accept = passenger >= min_score and passenger > driver
     return Decision(accept, passenger, driver, norm, phones, "ok" if accept else "score")
 

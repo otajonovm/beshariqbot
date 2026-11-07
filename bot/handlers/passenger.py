@@ -100,8 +100,10 @@ async def cmd_start(
         from bot.handlers.driver import show_driver_panel
 
         await message.answer(
-            "Assalomu alaykum!\n"
-            "<b>Karvon Taxi</b> — haydovchi paneli."
+            "Assalomu alaykum!\n\n"
+            "E'lon matnini shu yerga yozing yoki forward qiling — "
+            "bot barcha guruhlarga yuboradi.\n"
+            "Yoki «📢 E'lon berish» tugmasidan foydalaning."
         )
         await show_driver_panel(message, driver)
         return

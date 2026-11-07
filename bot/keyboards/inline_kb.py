@@ -128,6 +128,25 @@ def driver_approval_kb(driver_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def raw_post_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Hamma guruhlarga yuborish",
+                    callback_data="rawpost:ok",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Bekor qilish",
+                    callback_data="rawpost:cancel",
+                )
+            ],
+        ]
+    )
+
+
 def skip_optional_kb(prefix: str = "drvskip") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

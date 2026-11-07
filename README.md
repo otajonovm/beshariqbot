@@ -99,3 +99,25 @@ Oddiy holatda navbat **0 ms**. Daqiqasiga 18 tadan oshsa yoki Telegram `429 Retr
 Kutilayotgan yo'l, webhook va iliq ulanishda: foydalanuvchi yuborganidan asosiy guruhda ko'ringuncha ko'pincha **200–700 ms** (Telegram yetkazishi + bitta `sendMessage`). Bundan tezroq bo'lish uchun qo'shimcha baza so'rovi qo'yilmagan.
 
 Kartada ism (`tg://user`), telefon (matnda bo'lsa), «Yo'lovchiga yozish» va «Asl xabar» tugmalari bor. Forward ishlatilmaydi: odam forwardni yopgan bo'lsa haydovchi ismni ko'rmas edi.
+
+## Haydovchi: lichkaga e'lon tashlash (sodda yo'l)
+
+Eski panel («📢 E'lon berish» wizard) o'z holicha ishlayveradi. Qo'shimcha sodda yo'l:
+
+1. Tasdiqlangan (`active`) haydovchi bot **lichkasiga** o'z e'lon matnini yozadi yoki boshqa chatdan **forward** / copy-paste qiladi (rasm + caption ham bo'ladi).
+2. Bot matnni buzmaydi: asl matn saqlanadi, pastiga ixtiyoriy telefon/`@username` va «Bot orqali» qo'shilishi mumkin.
+3. Standart holatda oldindan ko'rish chiqadi: **✅ Hamma guruhlarga yuborish** / **❌ Bekor qilish**. Tasdiqlanmasa guruhga chiqmaydi.
+4. Tasdiqdan keyin **ulangan barcha guruhlarga** (426. Global dan tashqari) yuboriladi. **426. Global** — faqat yo'lovchi/taksi hub; haydovchi e'loni u yerga tushmaydi.
+5. Oxirida: `Yuborildi: N ta guruh` (+ xato bo'lgan guruhlar).
+6. Soatlik spam limati: `DRIVER_POST_LIMIT_PER_HOUR` (standart 20).
+7. Tez takrorlash: **🔁 Oxirgi e'lonni takrorlash**.
+
+**Nima e'lon emas:** `/start` va boshqa buyruqlar, panel tugmalari, FSM javoblari (anketa, narx, bo'sh joy).
+
+| O'zgaruvchi | Ma'nosi |
+| --- | --- |
+| `DRIVER_RAW_CONFIRM` | `true` (standart) — preview; `false` — darhol yuborish |
+| `DRIVER_POST_LIMIT_PER_HOUR` | Soatiga nechta xom e'lon. Standart: `20` |
+| `DRIVER_POST_GROUP_IDS` | Bo'sh = barcha `SUPERGROUP_IDS` minus **426. Global** |
+
+Mavjud haydovchilar qayta ro'yxatdan o'tkazilmaydi; yetishmasa faqat bo'sh maydon so'raladi.
