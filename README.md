@@ -141,6 +141,22 @@ Haydovchi e'loni guruhga rasm + qatorma-qator caption bilan chiqadi (`👤 Haydo
 
 **👤 Profilim** — ism, telefon, mashina, rang, raqam, joylar, yo'nalish, vaqt shabloni va rasm. Har maydon yonida **✏️** tugma: faqat shu maydon so'raladi, qolganlari o'zgarmaydi. Keyingi e'lonlarda yangi ma'lumot ishlatiladi; qayta registratsiya yo'q.
 
+### Super-admin funksiyalar (`/admin` → 🎛 Funksiyalar)
+
+O'chirilganda tugma **umuman chiqmaydi** (stub yo'q). Keyingi `/start` yoki panelga qaytishda klaviatura yangilanadi.
+
+| Flag | Yashiradi / o'chiradi |
+| --- | --- |
+| `driver_auto_post` | ⏰ Avto-e'lon (+ To'xtatish / Joy yo'q) |
+| `driver_wizard` | 📢 E'lon berish |
+| `driver_raw_post` | lichkaga tashlash + 🔁 takrorlash + panel yo'riqnomasi |
+| `driver_profile_edit` | 👤 Profilim |
+| `driver_photo_edit` | ✏️ Rasm (profil ochiq qolishi mumkin) |
+| `driver_ask_time` | 🕐 vaqt so'rovi (oxirgi yoki «Hozir») |
+| `call_button` | 📞 guruh e'lonida |
+| `order_button` | 🚖 Zakas berish |
+| `passenger_relay` | yo'lovchi relay |
+
 ### Avto-e'lon
 
 Panelda **⏰ Avto-e'lon**:

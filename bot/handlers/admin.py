@@ -26,10 +26,17 @@ from bot.database.db_requests import (
 )
 from bot.database.models import DriverStatus
 from bot.keyboards.default_kb import BTN_CANCEL, driver_panel_kb, main_menu_kb
-from bot.keyboards.inline_kb import admin_leaderboard_kb, admin_menu_kb
+from bot.keyboards.inline_kb import admin_flags_kb, admin_leaderboard_kb, admin_menu_kb
 from bot.relay.detect import normalize
 from bot.relay.service import groups_overview
 from bot.relay.store import add_keyword, disable_keyword, format_relay_stats
+from bot.services.feature_flags import (
+    FLAG_BY_KEY,
+    flags_status_lines,
+    is_enabled,
+    set_flag,
+    snapshot,
+)
 from bot.services.leaderboard import get_leaderboard_text_by_type, publish_leaderboard_to_group
 from bot.states.order_states import AdminExtend
 
@@ -445,6 +452,55 @@ async def cb_back_main(callback: CallbackQuery) -> None:
     except TelegramBadRequest:
         await callback.message.answer("🔐 Admin panel:", reply_markup=admin_menu_kb())
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin:flags")
+async def cb_flags(callback: CallbackQuery) -> None:
+    text = flags_status_lines()
+    try:
+        await callback.message.edit_text(text, reply_markup=admin_flags_kb())
+    except TelegramBadRequest:
+        await callback.message.answer(text, reply_markup=admin_flags_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:flag:"))
+async def cb_flag_toggle(callback: CallbackQuery, session: AsyncSession) -> None:
+    if not callback.data:
+        await callback.answer()
+        return
+    key = callback.data.split(":", 2)[2]
+    meta = FLAG_BY_KEY.get(key)
+    if meta is None:
+        await callback.answer("Noma'lum flag.", show_alert=True)
+        return
+    new_val = not is_enabled(key)
+    await set_flag(session, key, new_val)
+    await session.commit()
+
+    # Avto-e'lon o'chirilsa faol sessiyalarni to'xtat
+    if key == "driver_auto_post" and not new_val:
+        from sqlalchemy import select
+
+        from bot.database.db_requests import stop_auto_post
+        from bot.database.models import AutoPostSession, AutoPostStatus
+
+        result = await session.execute(
+            select(AutoPostSession.driver_id).where(
+                AutoPostSession.status == AutoPostStatus.ACTIVE.value
+            )
+        )
+        for driver_id in result.scalars().all():
+            await stop_auto_post(session, int(driver_id), reason="manual")
+        await session.commit()
+
+    text = flags_status_lines(snapshot())
+    try:
+        await callback.message.edit_text(text, reply_markup=admin_flags_kb())
+    except TelegramBadRequest:
+        await callback.message.answer(text, reply_markup=admin_flags_kb())
+    state = "yoqildi" if new_val else "o'chirildi"
+    await callback.answer(f"{meta.title}: {state}")
 
 
 @router.callback_query(F.data.startswith("admin:lb:"))

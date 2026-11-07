@@ -287,6 +287,25 @@ def _stub_from_row(s: AutoPostSession) -> AutoPostSession:
 
 
 async def check_auto_posts(bot: Bot, session_maker: async_sessionmaker) -> None:
+    from bot.services.feature_flags import is_enabled
+
+    if not is_enabled("driver_auto_post"):
+        # Flag o'chiq — faol sessiyalarni yop
+        async with session_maker() as session:
+            from sqlalchemy import select
+
+            result = await session.execute(
+                select(AutoPostSession.driver_id).where(
+                    AutoPostSession.status == AutoPostStatus.ACTIVE.value
+                )
+            )
+            ids = [int(x) for x in result.scalars().all()]
+            for did in ids:
+                await stop_auto_post(session, did, reason="manual")
+            await session.commit()
+        sync_active_from_rows([])
+        return
+
     async with session_maker() as session:
         due = await list_due_auto_posts(session)
         stubs = [_stub_from_row(s) for s in due]

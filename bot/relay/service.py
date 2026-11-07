@@ -339,6 +339,11 @@ async def sweep_message(message: Message, bot: Bot) -> bool:
 
 
 async def relay_message(message: Message, bot: Bot) -> None:
+    from bot.services.feature_flags import is_enabled
+
+    if not is_enabled("passenger_relay"):
+        return
+
     if await sweep_message(message, bot):
         return
 

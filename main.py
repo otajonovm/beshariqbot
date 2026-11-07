@@ -115,6 +115,12 @@ async def prepare(bot: Bot, scheduler: AsyncIOScheduler) -> None:
 
     await init_db()
     try:
+        from bot.services.feature_flags import bootstrap_flags
+
+        await bootstrap_flags(async_session_maker)
+    except Exception:
+        logger.exception("Feature flags bootstrap")
+    try:
         await load_keywords()
         await warm_dedup(dedup, settings.dedup_minutes)
         for chat_id in settings.resolved_sweep_group_ids:

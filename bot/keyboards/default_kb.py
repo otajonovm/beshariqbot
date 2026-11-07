@@ -96,31 +96,42 @@ def driver_panel_kb(
     *,
     has_last: bool = False,
     auto_active: bool = False,
+    show_wizard: bool = True,
+    show_raw: bool = True,
+    show_auto: bool = True,
+    show_profile: bool = True,
 ) -> ReplyKeyboardMarkup:
-    rows: list[list[KeyboardButton]] = [
-        [KeyboardButton(text=BTN_ANNOUNCE)],
-    ]
-    if has_last:
+    """O'chiq flaglar uchun qator umuman qo'shilmaydi (stub yo'q)."""
+    rows: list[list[KeyboardButton]] = []
+    if show_wizard:
+        rows.append([KeyboardButton(text=BTN_ANNOUNCE)])
+    if show_raw and has_last:
         rows.append([KeyboardButton(text=BTN_REPEAT_LAST)])
-    rows.append([KeyboardButton(text=BTN_AUTO_POST)])
-    if auto_active:
-        rows.append(
-            [
-                KeyboardButton(text=BTN_AUTO_STOP),
-                KeyboardButton(text=BTN_NO_SEATS),
-            ]
-        )
-    rows.extend(
-        [
-            [KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_DRIVER_GROUPS)],
-            [KeyboardButton(text=BTN_PASSENGER_MENU)],
-        ]
+    if show_auto:
+        rows.append([KeyboardButton(text=BTN_AUTO_POST)])
+        if auto_active:
+            rows.append(
+                [
+                    KeyboardButton(text=BTN_AUTO_STOP),
+                    KeyboardButton(text=BTN_NO_SEATS),
+                ]
+            )
+    profile_row: list[KeyboardButton] = []
+    if show_profile:
+        profile_row.append(KeyboardButton(text=BTN_PROFILE))
+    profile_row.append(KeyboardButton(text=BTN_DRIVER_GROUPS))
+    rows.append(profile_row)
+    rows.append([KeyboardButton(text=BTN_PASSENGER_MENU)])
+    placeholder = (
+        "E'lon matnini yozing yoki tashlang"
+        if show_raw
+        else "Panel tugmasini tanlang"
     )
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="E'lon matnini yozing yoki tashlang",
+        input_field_placeholder=placeholder,
     )
 
 

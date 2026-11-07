@@ -173,6 +173,8 @@ def _panel_kb(
     *,
     auto_active: bool | None = None,
 ) -> "ReplyKeyboardMarkup":
+    from bot.services.feature_flags import is_enabled
+
     if isinstance(driver, Driver):
         uid = driver.telegram_id
         from bot.services.auto_post import hydrate_last_raw
@@ -182,19 +184,41 @@ def _panel_kb(
         uid = driver
     else:
         uid = None
-    has_last = bool(uid and get_last_raw(uid))
-    if auto_active is None and uid is not None:
+    show_raw = is_enabled("driver_raw_post")
+    show_auto = is_enabled("driver_auto_post")
+    has_last = bool(uid and show_raw and get_last_raw(uid))
+    if auto_active is None and uid is not None and show_auto:
         from bot.services.auto_post import is_auto_active
 
         auto_active = is_auto_active(uid)
-    return driver_panel_kb(has_last=has_last, auto_active=bool(auto_active))
+    elif not show_auto:
+        auto_active = False
+    return driver_panel_kb(
+        has_last=has_last,
+        auto_active=bool(auto_active),
+        show_wizard=is_enabled("driver_wizard"),
+        show_raw=show_raw,
+        show_auto=show_auto,
+        show_profile=is_enabled("driver_profile_edit"),
+    )
 
 
 def driver_guide_text() -> str:
-    return (
-        "💡 <b>E'lon matnini shu yerga tashlang</b> — bot barcha guruhlarga yuboradi.\n"
-        "Yoki «📢 E'lon berish» / «⏰ Avto-e'lon» tugmasidan foydalaning."
-    )
+    from bot.services.feature_flags import is_enabled
+
+    parts: list[str] = []
+    if is_enabled("driver_raw_post"):
+        parts.append(
+            "💡 <b>E'lon matnini shu yerga tashlang</b> — bot barcha guruhlarga yuboradi."
+        )
+    hints: list[str] = []
+    if is_enabled("driver_wizard"):
+        hints.append("«📢 E'lon berish»")
+    if is_enabled("driver_auto_post"):
+        hints.append("«⏰ Avto-e'lon»")
+    if hints:
+        parts.append("Yoki " + " / ".join(hints) + " tugmasidan foydalaning.")
+    return "\n".join(parts) if parts else "Panel tugmalaridan foydalaning."
 
 
 async def show_driver_panel(message: Message, driver: Driver) -> None:
@@ -210,12 +234,16 @@ async def show_driver_panel(message: Message, driver: Driver) -> None:
             active = await get_active_auto_post(session, driver.telegram_id)
             auto_on = active is not None
             set_auto_active(driver.telegram_id, auto_on)
-            if active is not None:
+            from bot.services.feature_flags import is_enabled
+
+            if active is not None and is_enabled("driver_auto_post"):
                 ends = active.ends_at.astimezone().strftime("%H:%M")
                 auto_line = (
                     f"\n⏰ <b>Avto-e'lon yoqilgan</b> "
                     f"(har {active.interval_sec}s, ~{ends} gacha)"
                 )
+            elif not is_enabled("driver_auto_post"):
+                auto_on = False
     except Exception:
         logger.debug("auto status panel fail", exc_info=True)
 
@@ -229,13 +257,14 @@ async def show_driver_panel(message: Message, driver: Driver) -> None:
     if missing:
         labels = ", ".join(DRIVER_FIELD_LABELS[k] for k in missing)
         miss_line = f"\n⚠️ Yetishmayotgan: <b>{labels}</b> (e'lon berishda so'raladi)"
+    guide = driver_guide_text()
+    guide_block = f"\n\n{guide}" if guide else ""
     await message.answer(
         f"🚘 <b>Haydovchi paneli</b>\n\n"
         f"👤 {driver.full_name}\n"
         f"🚘 {driver.car_model or '—'} · {driver.car_number or '—'}\n"
         f"📞 {driver.phone or '—'}\n"
-        f"{extra}{miss_line}{auto_line}\n\n"
-        f"{driver_guide_text()}\n\n"
+        f"{extra}{miss_line}{auto_line}{guide_block}\n\n"
         f"⭐ Asosiy guruh: <b>{settings.primary_group_title}</b>",
         reply_markup=_panel_kb(driver, auto_active=auto_on),
     )
@@ -408,6 +437,8 @@ async def _start_full_registration(
 
 @router.message(F.text == BTN_ANNOUNCE)
 async def on_announce(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    from bot.services.feature_flags import is_enabled
+
     user = message.from_user
     if user is None:
         return
@@ -417,6 +448,10 @@ async def on_announce(message: Message, state: FSMContext, session: AsyncSession
             "Avval haydovchi sifatida ro'yxatdan o'ting.",
             reply_markup=main_menu_kb(),
         )
+        return
+    if not is_enabled("driver_wizard"):
+        await state.clear()
+        await show_driver_panel(message, driver)
         return
     if driver.status == DriverStatus.BANNED.value:
         await message.answer("Profilingiz bloklangan.")
@@ -492,6 +527,14 @@ async def announce_seats(message: Message, state: FSMContext, session: AsyncSess
             message.bot, async_session_maker, user.id, seats
         )
     await state.update_data(free_seats=seats)
+    from bot.services.feature_flags import is_enabled
+
+    if not is_enabled("driver_ask_time"):
+        departure = normalize_departure(driver.last_departure_text or "") or (
+            resolve_template("now") or "Hozir yuryapman"
+        )
+        await _publish_wizard_announce(message, state, session, driver, departure)
+        return
     await state.set_state(DriverAnnounce.departure)
     await message.answer(
         "🕐 Ketish vaqtini tanlang:",
@@ -686,6 +729,8 @@ async def _ask_raw_departure(
     prefer_saved: bool = False,
 ) -> None:
     """Vaqt so'rash. prefer_saved=True (takrorlash) — saqlangan bilan preview."""
+    from bot.services.feature_flags import is_enabled
+
     await state.update_data(
         raw_text=payload.text,
         raw_photo=payload.photo_file_id,
@@ -693,6 +738,14 @@ async def _ask_raw_departure(
     saved = normalize_departure(
         payload.departure_text or driver.last_departure_text or ""
     )
+    # Flag o'chiq: so'ralmasin — oxirgi yoki "Hozir yuryapman"
+    if not is_enabled("driver_ask_time"):
+        departure = saved or resolve_template("now") or "Hozir yuryapman"
+        await state.update_data(departure_text=departure)
+        await _show_raw_preview(
+            message, state, driver, payload.text, payload.photo_file_id, departure
+        )
+        return
     if prefer_saved and saved:
         await state.update_data(departure_text=saved)
         await _show_raw_preview(message, state, driver, payload.text, payload.photo_file_id, saved)
@@ -751,6 +804,12 @@ async def _offer_or_send_raw(
     *,
     prefer_saved_time: bool = False,
 ) -> None:
+    from bot.services.feature_flags import is_enabled
+
+    if not is_enabled("driver_raw_post"):
+        await state.clear()
+        await show_driver_panel(message, driver)
+        return
     allowed, wait_sec = check_post_limit(driver.telegram_id)
     if not allowed:
         mins = max(1, (wait_sec + 59) // 60)
@@ -826,12 +885,18 @@ async def _dispatch_raw(
 
 @router.message(F.text == BTN_REPEAT_LAST)
 async def on_repeat_last(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    from bot.services.feature_flags import is_enabled
+
     driver = await _active_driver_or_none(message, session)
     if driver is None:
         await message.answer(
             "Avval haydovchi sifatida ro'yxatdan o'ting.",
             reply_markup=main_menu_kb(),
         )
+        return
+    if not is_enabled("driver_raw_post"):
+        await state.clear()
+        await show_driver_panel(message, driver)
         return
     last = get_last_raw(driver.telegram_id)
     if last is None:
@@ -1152,11 +1217,15 @@ async def show_profile_view(
 ) -> None:
     """Profil matni + rasm preview + tahrir tugmalari."""
     from bot.services.auto_post import is_auto_active
+    from bot.services.feature_flags import is_enabled
 
+    if not is_enabled("driver_profile_edit"):
+        await target.answer("Panel:", reply_markup=_panel_kb(driver))
+        return
     text = _profile_text(driver)
-    if is_auto_active(driver.telegram_id):
+    if is_auto_active(driver.telegram_id) and is_enabled("driver_auto_post"):
         text += "\n\n⏰ <b>Avto-e'lon yoqilgan</b>"
-    kb = profile_edit_kb()
+    kb = profile_edit_kb(show_photo=is_enabled("driver_photo_edit"))
     panel = _panel_kb(driver)
     if driver.photo_file_id:
         try:
@@ -1246,6 +1315,8 @@ async def profile_ready_edit(
 
 @router.message(F.text == BTN_PROFILE)
 async def on_profile(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    from bot.services.feature_flags import is_enabled
+
     user = message.from_user
     if user is None:
         return
@@ -1260,6 +1331,9 @@ async def on_profile(message: Message, state: FSMContext, session: AsyncSession)
         )
         return
     await state.clear()
+    if not is_enabled("driver_profile_edit"):
+        await show_driver_panel(message, driver)
+        return
     await show_profile_view(message, driver)
 
 
@@ -1305,6 +1379,8 @@ async def profile_edit_start(
     state: FSMContext,
     session: AsyncSession,
 ) -> None:
+    from bot.services.feature_flags import is_enabled
+
     user = callback.from_user
     if user is None or not callback.data:
         await callback.answer()
@@ -1315,6 +1391,11 @@ async def profile_edit_start(
     driver = await get_driver(session, user.id)
     if driver is None or not driver.is_legacy_or_approved() or not driver.is_access_valid():
         await callback.answer("Ruxsat yo'q.", show_alert=True)
+        return
+    if not is_enabled("driver_profile_edit"):
+        await state.clear()
+        await show_driver_panel(callback.message, driver)
+        await callback.answer()
         return
 
     await state.update_data(edit_field=field)
@@ -1347,6 +1428,13 @@ async def profile_edit_start(
         return
 
     if field == "photo":
+        from bot.services.feature_flags import is_enabled
+
+        if not is_enabled("driver_photo_edit"):
+            await state.clear()
+            await show_profile_view(callback.message, driver)
+            await callback.answer()
+            return
         await state.set_state(DriverProfileEdit.waiting)
         await callback.message.answer(
             "Yangi mashina rasmini yuboring yoki rasmni o'chiring:",
@@ -2007,6 +2095,10 @@ class _ActiveRawPostFilter(Filter):
             return False
         if text in RESERVED_PRIVATE_TEXTS:
             return False
+        from bot.services.feature_flags import is_enabled
+
+        if not is_enabled("driver_raw_post"):
+            return False
         has_photo = bool(message.photo)
         body = (message.text or message.caption or "").strip()
         if not has_photo and not body:
@@ -2028,8 +2120,13 @@ async def on_raw_driver_post(
     session: AsyncSession,
 ) -> None:
     """Lichkadagi oddiy matn / forward / rasm+caption → e'lon."""
+    from bot.services.feature_flags import is_enabled
+
     driver = await _active_driver_or_none(message, session)
     if driver is None:
+        return
+    if not is_enabled("driver_raw_post"):
+        await show_driver_panel(message, driver)
         return
     payload = _extract_raw_payload(message)
     if payload is None:

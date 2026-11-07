@@ -251,32 +251,39 @@ def resolve_announce_photo(
     return pid or None
 
 
-def driver_announce_kb(driver: Driver) -> InlineKeyboardMarkup:
-    """🚖 Zakas berish + 📞 tel (telefon bo'lmasa — ✍️ Yozish)."""
-    bot_user = settings.bot_username.lstrip("@")
-    book_url = f"https://t.me/{bot_user}?start=book_{driver.telegram_id}"
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="🚖 Zakas berish", url=book_url)],
-    ]
-    phone = normalize_uz_phone(driver.phone)
-    if phone:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"📞 {phone}",
-                    url=phone_tel_url(phone),
-                )
-            ]
-        )
-    else:
-        from bot.relay.card import contact_url
+def driver_announce_kb(driver: Driver) -> InlineKeyboardMarkup | None:
+    """🚖 Zakas / 📞 tel — flag o'chiq bo'lsa qator yo'q. Ikkalasi o'chiq → None."""
+    from bot.services.feature_flags import is_enabled
 
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="✍️ Yozish",
-                    url=contact_url(driver.telegram_id, driver.username),
-                )
-            ]
-        )
+    show_order = is_enabled("order_button")
+    show_call = is_enabled("call_button")
+    rows: list[list[InlineKeyboardButton]] = []
+    if show_order:
+        bot_user = settings.bot_username.lstrip("@")
+        book_url = f"https://t.me/{bot_user}?start=book_{driver.telegram_id}"
+        rows.append([InlineKeyboardButton(text="🚖 Zakas berish", url=book_url)])
+    if show_call:
+        phone = normalize_uz_phone(driver.phone)
+        if phone:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"📞 {phone}",
+                        url=phone_tel_url(phone),
+                    )
+                ]
+            )
+        else:
+            from bot.relay.card import contact_url
+
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="✍️ Yozish",
+                        url=contact_url(driver.telegram_id, driver.username),
+                    )
+                ]
+            )
+    if not rows:
+        return None
     return InlineKeyboardMarkup(inline_keyboard=rows)

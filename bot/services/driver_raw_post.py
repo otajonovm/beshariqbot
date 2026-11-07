@@ -25,6 +25,10 @@ from bot.services.driver_card import (
     resolve_announce_photo,
 )
 
+
+def _announce_markup(driver: Driver) -> InlineKeyboardMarkup | None:
+    return driver_announce_kb(driver)
+
 logger = logging.getLogger(__name__)
 
 TEXT_LIMIT = 4096
@@ -158,7 +162,7 @@ async def send_one(
         direction=payload.direction,
     )
     photo = resolve_announce_photo(driver, payload.photo_file_id)
-    markup = driver_announce_kb(driver)
+    markup = _announce_markup(driver)
     return await _send_with_retry(bot, chat_id, text, photo, markup)
 
 

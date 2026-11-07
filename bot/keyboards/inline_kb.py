@@ -103,12 +103,35 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Statistika", callback_data="admin:stats")],
+            [InlineKeyboardButton(text="🎛 Funksiyalar", callback_data="admin:flags")],
             [InlineKeyboardButton(text="🏆 Reyting (Gemifikatsiya)", callback_data="admin:lb_menu")],
             [InlineKeyboardButton(text="👥 Guruhlar holati", callback_data="admin:groups")],
             [InlineKeyboardButton(text="🚘 Haydovchilar", callback_data="admin:drivers")],
             [InlineKeyboardButton(text="➕ Obunani uzaytirish", callback_data="admin:extend")],
         ]
     )
+
+
+def admin_flags_kb(values: dict[str, bool] | None = None) -> InlineKeyboardMarkup:
+    from bot.services.feature_flags import FLAG_DEFS, snapshot
+
+    vals = values if values is not None else snapshot()
+    rows: list[list[InlineKeyboardButton]] = []
+    for meta in FLAG_DEFS:
+        on = bool(vals.get(meta.key, True))
+        mark = "✅" if on else "❌"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark} {meta.title}",
+                    callback_data=f"admin:flag:{meta.key}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin:back_main")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def driver_approval_kb(driver_id: int) -> InlineKeyboardMarkup:
@@ -245,31 +268,31 @@ def profile_departure_kb() -> InlineKeyboardMarkup:
     )
 
 
-def profile_edit_kb() -> InlineKeyboardMarkup:
-    """Har maydon uchun ✏️ O'zgartirish."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✏️ Ism", callback_data="prof:name"),
-                InlineKeyboardButton(text="✏️ Telefon", callback_data="prof:phone"),
-            ],
-            [
-                InlineKeyboardButton(text="✏️ Mashina", callback_data="prof:car"),
-                InlineKeyboardButton(text="✏️ Rang", callback_data="prof:color"),
-            ],
-            [
-                InlineKeyboardButton(text="✏️ Raqam", callback_data="prof:plate"),
-                InlineKeyboardButton(text="✏️ Joylar", callback_data="prof:seats"),
-            ],
-            [
-                InlineKeyboardButton(text="✏️ Yo'nalish", callback_data="prof:route"),
-                InlineKeyboardButton(text="✏️ Vaqt", callback_data="prof:time"),
-            ],
-            [
-                InlineKeyboardButton(text="✏️ Rasm", callback_data="prof:photo"),
-            ],
-        ]
-    )
+def profile_edit_kb(*, show_photo: bool = True) -> InlineKeyboardMarkup:
+    """Har maydon uchun ✏️ O'zgartirish. show_photo=False → rasm qatori yo'q."""
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(text="✏️ Ism", callback_data="prof:name"),
+            InlineKeyboardButton(text="✏️ Telefon", callback_data="prof:phone"),
+        ],
+        [
+            InlineKeyboardButton(text="✏️ Mashina", callback_data="prof:car"),
+            InlineKeyboardButton(text="✏️ Rang", callback_data="prof:color"),
+        ],
+        [
+            InlineKeyboardButton(text="✏️ Raqam", callback_data="prof:plate"),
+            InlineKeyboardButton(text="✏️ Joylar", callback_data="prof:seats"),
+        ],
+        [
+            InlineKeyboardButton(text="✏️ Yo'nalish", callback_data="prof:route"),
+            InlineKeyboardButton(text="✏️ Vaqt", callback_data="prof:time"),
+        ],
+    ]
+    if show_photo:
+        rows.append(
+            [InlineKeyboardButton(text="✏️ Rasm", callback_data="prof:photo")]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def profile_ready_kb() -> InlineKeyboardMarkup:

@@ -434,6 +434,18 @@ class Order(Base):
         )
 
 
+class FeatureFlag(Base):
+    """Super-admin funksiya yoqish/o'chirish (default: yoqilgan)."""
+
+    __tablename__ = "feature_flags"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class RelayHit(Base):
     """Manba guruhdan asosiy guruhga yuborilgan yo'lovchi xabari."""
 
