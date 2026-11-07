@@ -35,12 +35,23 @@ class DriverMissing(StatesGroup):
 class DriverAnnounce(StatesGroup):
     direction = State()
     free_seats = State()
+    departure = State()
+    custom_time = State()
 
 
 class DriverRawPost(StatesGroup):
-    """Lichkadagi xom e'lon — oldindan ko'rish / tasdiq."""
+    """Lichkadagi xom e'lon — vaqt, oldindan ko'rish / tasdiq."""
 
+    departure = State()
+    custom_time = State()
     confirm = State()
+
+
+class DriverDepartureEdit(StatesGroup):
+    """Profil: ketish vaqti shablonini o'zgartirish."""
+
+    picking = State()
+    custom_time = State()
 
 
 class AdminExtend(StatesGroup):

@@ -54,9 +54,17 @@ from bot.keyboards.default_kb import (
 from bot.keyboards.inline_kb import (
     cancel_reason_kb,
     claim_kb,
+    departure_time_kb,
     driver_approval_kb,
     group_invite_kb,
+    profile_departure_kb,
     raw_post_confirm_kb,
+)
+from bot.services.departure import (
+    MAX_CUSTOM_LEN,
+    normalize_departure,
+    resolve_template,
+    strip_departure_line,
 )
 from bot.services.driver_raw_post import (
     RawPayload,
@@ -70,7 +78,13 @@ from bot.services.driver_raw_post import (
     save_last_raw,
 )
 from bot.services.notify import notify_admins
-from bot.states.order_states import DriverAnnounce, DriverMissing, DriverRawPost, DriverReg
+from bot.states.order_states import (
+    DriverAnnounce,
+    DriverDepartureEdit,
+    DriverMissing,
+    DriverRawPost,
+    DriverReg,
+)
 
 logger = logging.getLogger(__name__)
 router = Router(name="driver")
@@ -216,8 +230,17 @@ async def _finish_missing_flow(
         payload = RawPayload(
             text=str(pending_raw.get("text") or ""),
             photo_file_id=pending_raw.get("photo_file_id"),
+            departure_text=pending_raw.get("departure_text"),
         )
-        await _offer_or_send_raw(message, state, session, driver, payload)
+        prefer = bool(pending_raw.get("departure_text") or driver.last_departure_text)
+        await _offer_or_send_raw(
+            message,
+            state,
+            session,
+            driver,
+            payload,
+            prefer_saved_time=prefer,
+        )
         return
     await show_driver_panel(message, driver)
 
@@ -388,23 +411,46 @@ async def announce_seats(message: Message, state: FSMContext, session: AsyncSess
     if len(seats) < 1 or len(seats) > 40:
         await message.answer("Bo'sh joy sonini yozing (masalan: 2).")
         return
-    data = await state.get_data()
-    direction = data.get("direction")
     user = message.from_user
-    if user is None or not direction:
-        await state.clear()
-        await message.answer("Xatolik. Qaytadan urinib ko'ring.", reply_markup=_panel_kb())
+    if user is None:
         return
     driver = await get_driver(session, user.id)
     if driver is None:
         await state.clear()
         await message.answer("Profil topilmadi.", reply_markup=main_menu_kb())
         return
+    await state.update_data(free_seats=seats)
+    await state.set_state(DriverAnnounce.departure)
+    await message.answer(
+        "🕐 Ketish vaqtini tanlang:",
+        reply_markup=departure_time_kb(driver.last_departure_text, prefix="adep"),
+    )
+
+
+async def _publish_wizard_announce(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    driver: Driver,
+    departure: str,
+) -> None:
+    data = await state.get_data()
+    direction = data.get("direction")
+    seats = data.get("free_seats") or ""
+    if not direction:
+        await state.clear()
+        await message.answer("Xatolik. Qaytadan urinib ko'ring.", reply_markup=_panel_kb(driver))
+        return
+
+    await update_driver_fields(session, driver.telegram_id, last_departure_text=departure)
+    await session.commit()
+    driver.last_departure_text = departure
 
     origin, dest = DIRECTION_LABELS.get(direction, ("Beshariq", "Toshkent"))
     color = f" · {driver.car_color}" if driver.car_color else ""
     text = (
         f"📢 <b>Haydovchi e'loni</b>\n\n"
+        f"🕐 {departure}\n"
         f"👤 <b>{driver.full_name}</b>\n"
         f"🚘 {driver.car_model} · <code>{driver.car_number}</code>{color}\n"
         f"📍 {origin} ➡️ {dest}\n"
@@ -437,6 +483,98 @@ async def announce_seats(message: Message, state: FSMContext, session: AsyncSess
         )
 
 
+@router.callback_query(DriverAnnounce.departure, F.data.startswith("adep:"))
+async def announce_departure_cb(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = callback.from_user
+    if user is None or not callback.data:
+        await callback.answer()
+        return
+    code = callback.data.split(":", 1)[1]
+    if code == "cancel":
+        await state.clear()
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        await callback.message.answer("Bekor qilindi.", reply_markup=_panel_kb(user.id))
+        await callback.answer()
+        return
+
+    driver = await get_driver(session, user.id)
+    if driver is None:
+        await state.clear()
+        await callback.answer("Profil topilmadi.", show_alert=True)
+        return
+
+    if code == "custom":
+        await state.set_state(DriverAnnounce.custom_time)
+        await callback.message.answer(
+            f"Ketish vaqtini yozing (max {MAX_CUSTOM_LEN} belgi):\n"
+            "<i>Masalan: Bugun soat 18:00 da Beshariqdan</i>",
+            reply_markup=cancel_kb(),
+        )
+        await callback.answer()
+        return
+
+    if code == "last":
+        departure = normalize_departure(driver.last_departure_text or "")
+        if not departure:
+            await callback.answer("Oxirgi vaqt yo'q.", show_alert=True)
+            return
+    else:
+        departure = resolve_template(code)
+        if not departure:
+            await callback.answer("Noto'g'ri tanlov.", show_alert=True)
+            return
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await callback.answer(departure)
+    await _publish_wizard_announce(callback.message, state, session, driver, departure)
+
+
+@router.message(DriverAnnounce.custom_time, F.text)
+async def announce_custom_time(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    if message.text == BTN_CANCEL:
+        await state.clear()
+        uid = message.from_user.id if message.from_user else None
+        await message.answer("Bekor qilindi.", reply_markup=_panel_kb(uid))
+        return
+    departure = normalize_departure(message.text or "")
+    if not departure:
+        await message.answer(
+            f"1–{MAX_CUSTOM_LEN} belgi orasida yozing.",
+            reply_markup=cancel_kb(),
+        )
+        return
+    user = message.from_user
+    if user is None:
+        return
+    driver = await get_driver(session, user.id)
+    if driver is None:
+        await state.clear()
+        await message.answer("Profil topilmadi.", reply_markup=main_menu_kb())
+        return
+    await _publish_wizard_announce(message, state, session, driver, departure)
+
+
+@router.message(DriverAnnounce.departure, F.text == BTN_CANCEL)
+async def announce_dep_cancel(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    uid = message.from_user.id if message.from_user else None
+    await message.answer("Bekor qilindi.", reply_markup=_panel_kb(uid))
+
+
 # ----- Xom e'lon: lichkaga matn / forward / rasm -----
 
 
@@ -464,12 +602,79 @@ async def _active_driver_or_none(
     return driver
 
 
+async def _ask_raw_departure(
+    message: Message,
+    state: FSMContext,
+    driver: Driver,
+    payload: RawPayload,
+    *,
+    prefer_saved: bool = False,
+) -> None:
+    """Vaqt so'rash. prefer_saved=True (takrorlash) — saqlangan bilan preview."""
+    await state.update_data(
+        raw_text=payload.text,
+        raw_photo=payload.photo_file_id,
+    )
+    saved = normalize_departure(
+        payload.departure_text or driver.last_departure_text or ""
+    )
+    if prefer_saved and saved:
+        await state.update_data(departure_text=saved)
+        await _show_raw_preview(message, state, driver, payload.text, payload.photo_file_id, saved)
+        return
+    await state.set_state(DriverRawPost.departure)
+    await message.answer(
+        "🕐 Ketish vaqtini tanlang:",
+        reply_markup=departure_time_kb(driver.last_departure_text, prefix="dep"),
+    )
+
+
+async def _show_raw_preview(
+    message: Message,
+    state: FSMContext,
+    driver: Driver,
+    raw_text: str,
+    photo_file_id: str | None,
+    departure: str,
+) -> None:
+    await state.set_state(DriverRawPost.confirm)
+    await state.update_data(
+        raw_text=raw_text,
+        raw_photo=photo_file_id,
+        departure_text=departure,
+    )
+    preview = compose_body(
+        raw_text,
+        driver,
+        for_caption=bool(photo_file_id),
+        departure_text=departure,
+    )
+    header = "👀 <b>Oldindan ko'rish</b>\nGuruhlarga shunday chiqadi:\n\n"
+    if photo_file_id:
+        await message.answer_photo(
+            photo=photo_file_id,
+            caption=(header + (preview or "📷")).strip()[:1024],
+            reply_markup=raw_post_confirm_kb(),
+        )
+    else:
+        await message.answer(
+            header + (preview or "—"),
+            reply_markup=raw_post_confirm_kb(),
+        )
+    await message.answer(
+        "Tasdiqlang, vaqtni o'zgartiring yoki bekor qiling.",
+        reply_markup=_panel_kb(driver),
+    )
+
+
 async def _offer_or_send_raw(
     message: Message,
     state: FSMContext,
     session: AsyncSession,
     driver: Driver,
     payload: RawPayload,
+    *,
+    prefer_saved_time: bool = False,
 ) -> None:
     allowed, wait_sec = check_post_limit(driver.telegram_id)
     if not allowed:
@@ -481,40 +686,38 @@ async def _offer_or_send_raw(
         )
         return
 
-    if settings.driver_raw_confirm:
-        await state.set_state(DriverRawPost.confirm)
-        await state.update_data(
-            raw_text=payload.text,
-            raw_photo=payload.photo_file_id,
-        )
-        preview = compose_body(payload.text, driver, for_caption=bool(payload.photo_file_id))
-        header = "👀 <b>Oldindan ko'rish</b>\nGuruhlarga shunday chiqadi:\n\n"
-        if payload.photo_file_id:
-            await message.answer_photo(
-                photo=payload.photo_file_id,
-                caption=(header + (preview or "📷")).strip()[:1024],
-                reply_markup=raw_post_confirm_kb(),
-            )
-        else:
-            await message.answer(
-                header + (preview or "—"),
-                reply_markup=raw_post_confirm_kb(),
-            )
-        await message.answer(
-            "Tasdiqlang yoki bekor qiling.",
-            reply_markup=_panel_kb(driver),
-        )
-        return
-
-    await _dispatch_raw(message, state, driver, payload)
+    # Asl matndan eski 🕐 qatorini ajratib olish
+    clean_text = strip_departure_line(payload.text)
+    payload = RawPayload(
+        text=clean_text,
+        photo_file_id=payload.photo_file_id,
+        departure_text=payload.departure_text,
+    )
+    await _ask_raw_departure(
+        message,
+        state,
+        driver,
+        payload,
+        prefer_saved=prefer_saved_time,
+    )
 
 
 async def _dispatch_raw(
     message: Message,
     state: FSMContext,
+    session: AsyncSession,
     driver: Driver,
     payload: RawPayload,
 ) -> None:
+    if payload.departure_text:
+        await update_driver_fields(
+            session,
+            driver.telegram_id,
+            last_departure_text=payload.departure_text,
+        )
+        await session.commit()
+        driver.last_departure_text = payload.departure_text
+
     await state.clear()
     bot = message.bot
     chat_id = message.chat.id
@@ -562,6 +765,13 @@ async def on_repeat_last(message: Message, state: FSMContext, session: AsyncSess
             reply_markup=_panel_kb(driver),
         )
         return
+    # Saqlangan vaqtni birga olib kelish
+    dep = last.departure_text or driver.last_departure_text
+    payload = RawPayload(
+        text=last.text,
+        photo_file_id=last.photo_file_id,
+        departure_text=dep,
+    )
     if not await ensure_required_or_ask(
         message,
         state,
@@ -569,13 +779,127 @@ async def on_repeat_last(message: Message, state: FSMContext, session: AsyncSess
         resume_action="raw",
         extra_data={
             "pending_raw": {
-                "text": last.text,
-                "photo_file_id": last.photo_file_id,
+                "text": payload.text,
+                "photo_file_id": payload.photo_file_id,
+                "departure_text": payload.departure_text,
             }
         },
     ):
         return
-    await _offer_or_send_raw(message, state, session, driver, last)
+    await _offer_or_send_raw(
+        message, state, session, driver, payload, prefer_saved_time=True
+    )
+
+
+@router.callback_query(DriverRawPost.departure, F.data.startswith("dep:"))
+async def raw_departure_cb(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = callback.from_user
+    if user is None or not callback.data:
+        await callback.answer()
+        return
+    code = callback.data.split(":", 1)[1]
+    data = await state.get_data()
+    raw_text = str(data.get("raw_text") or "")
+    raw_photo = data.get("raw_photo")
+
+    if code == "cancel":
+        await state.clear()
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        await callback.message.answer("Bekor qilindi.", reply_markup=_panel_kb(user.id))
+        await callback.answer()
+        return
+
+    driver = await get_driver(session, user.id)
+    if driver is None:
+        await state.clear()
+        await callback.answer("Profil topilmadi.", show_alert=True)
+        return
+
+    if code == "custom":
+        await state.set_state(DriverRawPost.custom_time)
+        await callback.message.answer(
+            f"Ketish vaqtini yozing (max {MAX_CUSTOM_LEN} belgi):\n"
+            "<i>Masalan: Bugun soat 18:00 da Beshariqdan</i>",
+            reply_markup=cancel_kb(),
+        )
+        await callback.answer()
+        return
+
+    if code == "last":
+        departure = normalize_departure(driver.last_departure_text or "")
+        if not departure:
+            await callback.answer("Oxirgi vaqt yo'q — shablon tanlang.", show_alert=True)
+            return
+    else:
+        departure = resolve_template(code)
+        if not departure:
+            await callback.answer("Noto'g'ri tanlov.", show_alert=True)
+            return
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await callback.answer(departure)
+
+    if settings.driver_raw_confirm:
+        await _show_raw_preview(
+            callback.message, state, driver, raw_text, raw_photo, departure
+        )
+        return
+
+    payload = RawPayload(text=raw_text, photo_file_id=raw_photo, departure_text=departure)
+    await _dispatch_raw(callback.message, state, session, driver, payload)
+
+
+@router.message(DriverRawPost.custom_time, F.text)
+async def raw_custom_time(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    if message.text == BTN_CANCEL:
+        await state.clear()
+        uid = message.from_user.id if message.from_user else None
+        await message.answer("Bekor qilindi.", reply_markup=_panel_kb(uid))
+        return
+    departure = normalize_departure(message.text or "")
+    if not departure:
+        await message.answer(
+            f"1–{MAX_CUSTOM_LEN} belgi orasida yozing.",
+            reply_markup=cancel_kb(),
+        )
+        return
+    user = message.from_user
+    if user is None:
+        return
+    driver = await get_driver(session, user.id)
+    if driver is None:
+        await state.clear()
+        await message.answer("Profil topilmadi.", reply_markup=main_menu_kb())
+        return
+    data = await state.get_data()
+    raw_text = str(data.get("raw_text") or "")
+    raw_photo = data.get("raw_photo")
+    if settings.driver_raw_confirm:
+        await _show_raw_preview(message, state, driver, raw_text, raw_photo, departure)
+        return
+    payload = RawPayload(text=raw_text, photo_file_id=raw_photo, departure_text=departure)
+    await _dispatch_raw(message, state, session, driver, payload)
+
+
+@router.message(DriverRawPost.departure, F.text == BTN_CANCEL)
+async def raw_dep_cancel_btn(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    uid = message.from_user.id if message.from_user else None
+    await message.answer("Bekor qilindi.", reply_markup=_panel_kb(uid))
 
 
 @router.message(DriverRawPost.confirm, F.text == BTN_CANCEL)
@@ -587,7 +911,7 @@ async def raw_confirm_cancel_btn(message: Message, state: FSMContext) -> None:
 
 @router.message(DriverRawPost.confirm, F.text | F.photo)
 async def raw_confirm_waiting(message: Message) -> None:
-    await message.answer("Pastdagi ✅ yoki ❌ tugmasini bosing.")
+    await message.answer("Pastdagi ✅ / 🕐 / ❌ tugmalarini bosing.")
 
 
 @router.callback_query(DriverRawPost.confirm, F.data == "rawpost:cancel")
@@ -602,6 +926,30 @@ async def raw_post_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("Bekor qilindi")
 
 
+@router.callback_query(DriverRawPost.confirm, F.data == "rawpost:changetime")
+async def raw_post_change_time(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = callback.from_user
+    if user is None:
+        await callback.answer()
+        return
+    driver = await get_driver(session, user.id)
+    last = driver.last_departure_text if driver else None
+    await state.set_state(DriverRawPost.departure)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await callback.message.answer(
+        "🕐 Yangi ketish vaqtini tanlang:",
+        reply_markup=departure_time_kb(last, prefix="dep"),
+    )
+    await callback.answer()
+
+
 @router.callback_query(DriverRawPost.confirm, F.data == "rawpost:ok")
 async def raw_post_ok(
     callback: CallbackQuery,
@@ -613,9 +961,14 @@ async def raw_post_ok(
         await callback.answer()
         return
     data = await state.get_data()
+    departure = normalize_departure(str(data.get("departure_text") or ""))
+    if not departure:
+        await callback.answer("Avval ketish vaqtini tanlang.", show_alert=True)
+        return
     payload = RawPayload(
         text=str(data.get("raw_text") or ""),
         photo_file_id=data.get("raw_photo"),
+        departure_text=departure,
     )
     if not payload.text and not payload.photo_file_id:
         await state.clear()
@@ -635,7 +988,12 @@ async def raw_post_ok(
         await callback.answer(f"Limit. ~{mins} daqiqa kuting.", show_alert=True)
         return
 
-    await state.clear()
+    await update_driver_fields(
+        session, driver.telegram_id, last_departure_text=departure
+    )
+    await session.commit()
+    driver.last_departure_text = departure
+
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except TelegramBadRequest:
@@ -643,16 +1001,17 @@ async def raw_post_ok(
 
     bot = callback.bot
     chat_id = callback.message.chat.id if callback.message else user.id
+    await state.clear()
 
     ok: list[int] = []
     failed: list[tuple[int, str]] = []
     main_id, main_err = await post_to_main(bot, driver, payload)
     if main_id is not None and main_err is None:
         ok.append(main_id)
-        await callback.answer("Asosiy guruhga yuborildi")
+        await callback.answer("Yuborildi")
     elif main_id is not None:
         failed.append((main_id, main_err or "xato"))
-        await callback.answer("Asosiy guruhda xato", show_alert=True)
+        await callback.answer("Xato", show_alert=True)
     else:
         await callback.answer("Guruhlar yo'q", show_alert=True)
 
@@ -686,6 +1045,7 @@ async def on_profile(message: Message, state: FSMContext, session: AsyncSession)
         return
     opt = driver.missing_optional_fields()
     req = driver.missing_required_fields()
+    dep = (driver.last_departure_text or "").strip() or "—"
     lines = [
         "👤 <b>Profilingiz</b>\n",
         f"Ism: <b>{driver.full_name}</b>",
@@ -694,6 +1054,7 @@ async def on_profile(message: Message, state: FSMContext, session: AsyncSession)
         f"Rang: {driver.car_color or '—'}",
         f"O'rinlar: {driver.seats_count if driver.seats_count else '—'}",
         f"Rasm: {'bor' if driver.photo_file_id else 'yoq'}",
+        f"🕐 Ketish vaqti: <b>{dep}</b>",
         f"Status: <b>{driver.status}</b>",
     ]
     if req:
@@ -707,6 +1068,10 @@ async def on_profile(message: Message, state: FSMContext, session: AsyncSession)
             + ", ".join(DRIVER_FIELD_LABELS[k] for k in opt)
         )
     await message.answer("\n".join(lines), reply_markup=_panel_kb(driver))
+    await message.answer(
+        "Ketish vaqti shablonini o'zgartirish mumkin:",
+        reply_markup=profile_departure_kb(),
+    )
     fill_queue = req + opt
     if fill_queue:
         await state.set_state(DriverMissing.collecting)
@@ -717,6 +1082,121 @@ async def on_profile(message: Message, state: FSMContext, session: AsyncSession)
         )
         await message.answer("Yetishmayotgan maydonlarni birma-bir to'ldiramiz:")
         await _ask_next_missing(message, state)
+
+
+@router.callback_query(F.data == "pdep:edit")
+async def profile_dep_edit_start(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = callback.from_user
+    if user is None:
+        await callback.answer()
+        return
+    driver = await get_driver(session, user.id)
+    if driver is None or not driver.is_legacy_or_approved():
+        await callback.answer("Profil topilmadi.", show_alert=True)
+        return
+    await state.set_state(DriverDepartureEdit.picking)
+    await callback.message.answer(
+        "🕐 Yangi ketish vaqti shablonini tanlang:",
+        reply_markup=departure_time_kb(driver.last_departure_text, prefix="pdep"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(DriverDepartureEdit.picking, F.data.startswith("pdep:"))
+async def profile_dep_pick(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = callback.from_user
+    if user is None or not callback.data:
+        await callback.answer()
+        return
+    code = callback.data.split(":", 1)[1]
+    if code == "edit":
+        await callback.answer()
+        return
+    if code == "cancel":
+        await state.clear()
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        await callback.message.answer("Bekor qilindi.", reply_markup=_panel_kb(user.id))
+        await callback.answer()
+        return
+
+    driver = await get_driver(session, user.id)
+    if driver is None:
+        await state.clear()
+        await callback.answer("Profil topilmadi.", show_alert=True)
+        return
+
+    if code == "custom":
+        await state.set_state(DriverDepartureEdit.custom_time)
+        await callback.message.answer(
+            f"Ketish vaqtini yozing (max {MAX_CUSTOM_LEN} belgi):",
+            reply_markup=cancel_kb(),
+        )
+        await callback.answer()
+        return
+
+    if code == "last":
+        departure = normalize_departure(driver.last_departure_text or "")
+        if not departure:
+            await callback.answer("Hali saqlangan vaqt yo'q.", show_alert=True)
+            return
+    else:
+        departure = resolve_template(code)
+        if not departure:
+            await callback.answer("Noto'g'ri tanlov.", show_alert=True)
+            return
+
+    await update_driver_fields(session, user.id, last_departure_text=departure)
+    await session.commit()
+    await state.clear()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await callback.message.answer(
+        f"✅ Saqlandi: <b>{departure}</b>",
+        reply_markup=_panel_kb(user.id),
+    )
+    await callback.answer("Saqlandi")
+
+
+@router.message(DriverDepartureEdit.custom_time, F.text)
+async def profile_dep_custom(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = message.from_user
+    if user is None:
+        return
+    if message.text == BTN_CANCEL:
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=_panel_kb(user.id))
+        return
+    departure = normalize_departure(message.text or "")
+    if not departure:
+        await message.answer(
+            f"1–{MAX_CUSTOM_LEN} belgi orasida yozing.",
+            reply_markup=cancel_kb(),
+        )
+        return
+    await update_driver_fields(session, user.id, last_departure_text=departure)
+    await session.commit()
+    await state.clear()
+    await message.answer(
+        f"✅ Saqlandi: <b>{departure}</b>",
+        reply_markup=_panel_kb(user.id),
+    )
 
 
 @router.message(F.text == BTN_DRIVER_GROUPS)

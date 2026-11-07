@@ -113,6 +113,7 @@ async def update_driver_fields(
     car_color: str | None = None,
     seats_count: int | None = None,
     photo_file_id: str | None = None,
+    last_departure_text: str | None = None,
     clear_photo: bool = False,
 ) -> Driver | None:
     """Mavjud haydovchi maydonlarini to'ldirish. Bo'sh qiymat ustiga yozilmaydi."""
@@ -137,6 +138,10 @@ async def update_driver_fields(
         driver.photo_file_id = None
     elif (photo := _nonempty(photo_file_id)) is not None:
         driver.photo_file_id = photo
+    if last_departure_text is not None:
+        cleaned = last_departure_text.strip()
+        if cleaned:
+            driver.last_departure_text = cleaned[:120]
     await session.flush()
     return driver
 

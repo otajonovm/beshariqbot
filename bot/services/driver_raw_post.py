@@ -19,6 +19,7 @@ from aiogram.exceptions import (
 
 from bot.config import settings
 from bot.database.models import Driver
+from bot.services.departure import apply_departure
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ FOOTER_MARK = "Bot orqali"
 class RawPayload:
     text: str
     photo_file_id: str | None = None
+    departure_text: str | None = None
 
 
 # telegram_id -> oxirgi muvaffaqiyatli e'lon
@@ -48,6 +50,7 @@ def save_last_raw(driver_id: int, payload: RawPayload) -> None:
     _last_raw[driver_id] = RawPayload(
         text=payload.text,
         photo_file_id=payload.photo_file_id,
+        departure_text=payload.departure_text,
     )
 
 
@@ -82,12 +85,20 @@ def build_footer(driver: Driver) -> str:
     return f"\n\n{FOOTER_MARK}"
 
 
-def compose_body(raw_text: str, driver: Driver, *, for_caption: bool = False) -> str:
-    """Asl matn saqlanadi; footer sig'masa tashlab ketiladi (matn qisqartirilmaydi)."""
-    body = (raw_text or "").rstrip()
+def compose_body(
+    raw_text: str,
+    driver: Driver,
+    *,
+    for_caption: bool = False,
+    departure_text: str | None = None,
+) -> str:
+    """Asl matn saqlanadi; vaqt qatori alohida; footer sig'masa tashlanadi."""
+    dep = departure_text if departure_text is not None else getattr(
+        driver, "last_departure_text", None
+    )
+    body = apply_departure(raw_text or "", dep)
     limit = CAPTION_LIMIT if for_caption else TEXT_LIMIT
     footer = build_footer(driver)
-    # Escape qilingan matn + HTML footer
     escaped = escape(body) if body else ""
     if escaped:
         candidate = escaped + footer
@@ -95,10 +106,8 @@ def compose_body(raw_text: str, driver: Driver, *, for_caption: bool = False) ->
         candidate = footer.lstrip("\n")
     if len(candidate) <= limit:
         return candidate
-    # Footer sig'masa — faqat asl matn (escape)
     if escaped and len(escaped) <= limit:
         return escaped
-    # Juda uzun matn: Telegram o'zi rad etadi; qisqartirmaymiz
     return escaped or body
 
 
@@ -147,7 +156,12 @@ async def send_one(
     driver: Driver,
 ) -> None:
     for_caption = bool(payload.photo_file_id)
-    text = compose_body(payload.text, driver, for_caption=for_caption)
+    text = compose_body(
+        payload.text,
+        driver,
+        for_caption=for_caption,
+        departure_text=payload.departure_text,
+    )
     await _send_with_retry(bot, chat_id, text, payload.photo_file_id)
 
 

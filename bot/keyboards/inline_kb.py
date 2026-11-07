@@ -128,21 +128,119 @@ def driver_approval_kb(driver_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def raw_post_confirm_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def raw_post_confirm_kb(*, show_change_time: bool = True) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text="✅ Hamma guruhlarga yuborish",
+                callback_data="rawpost:ok",
+            )
+        ],
+    ]
+    if show_change_time:
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text="✅ Hamma guruhlarga yuborish",
-                    callback_data="rawpost:ok",
+                    text="🕐 Vaqtni o'zgartirish",
+                    callback_data="rawpost:changetime",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="❌ Bekor qilish",
+                callback_data="rawpost:cancel",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def departure_time_kb(
+    last_text: str | None = None,
+    *,
+    prefix: str = "dep",
+) -> InlineKeyboardMarkup:
+    """Ketish vaqti shablonlari. prefix: dep | adep | pdep (raw / announce / profile)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    last = (last_text or "").strip()
+    if last:
+        label = last if len(last) <= 28 else last[:25] + "..."
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"💾 Oxirgisi: {label}",
+                    callback_data=f"{prefix}:last",
+                )
+            ]
+        )
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="Hozir yuryapman",
+                    callback_data=f"{prefix}:now",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="30 daqiqadan keyin",
+                    callback_data=f"{prefix}:30m",
+                ),
+                InlineKeyboardButton(
+                    text="1 soatdan keyin",
+                    callback_data=f"{prefix}:1h",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="2 soatdan keyin",
+                    callback_data=f"{prefix}:2h",
+                ),
+                InlineKeyboardButton(
+                    text="Bugun kechqurun",
+                    callback_data=f"{prefix}:eve",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Ertaga ertalab",
+                    callback_data=f"{prefix}:tmr",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⏰ Hozirgi soatni qo'yish",
+                    callback_data=f"{prefix}:clock",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✍️ O'zim yozaman",
+                    callback_data=f"{prefix}:custom",
                 )
             ],
             [
                 InlineKeyboardButton(
                     text="❌ Bekor qilish",
-                    callback_data="rawpost:cancel",
+                    callback_data=f"{prefix}:cancel",
                 )
             ],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def profile_departure_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🕐 Ketish vaqtini o'zgartirish",
+                    callback_data="pdep:edit",
+                )
+            ]
         ]
     )
 

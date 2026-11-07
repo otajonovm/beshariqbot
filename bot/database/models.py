@@ -138,6 +138,8 @@ class Driver(Base):
     car_color: Mapped[str | None] = mapped_column(String(64), nullable=True)
     seats_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     photo_file_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Oxirgi tanlangan ketish vaqti matni (e'lon shabloni)
+    last_departure_text: Mapped[str | None] = mapped_column(String(120), nullable=True)
     trial_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     subscription_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -500,6 +502,7 @@ async def init_db() -> None:
                 ("car_color", "VARCHAR(64)"),
                 ("seats_count", "INTEGER"),
                 ("photo_file_id", "VARCHAR(256)"),
+                ("last_departure_text", "VARCHAR(120)"),
             ]
             for col_name, col_type in profile_columns:
                 if col_name not in driver_cols:

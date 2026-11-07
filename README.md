@@ -121,3 +121,14 @@ Eski panel («📢 E'lon berish» wizard) o'z holicha ishlayveradi. Qo'shimcha s
 | `DRIVER_POST_GROUP_IDS` | Bo'sh = barcha `SUPERGROUP_IDS` minus **426. Global** |
 
 Mavjud haydovchilar qayta ro'yxatdan o'tkazilmaydi; yetishmasa faqat bo'sh maydon so'raladi.
+
+### Ketish vaqti
+
+E'lon (raw yoki «📢 E'lon berish») yuborishdan oldin bot ketish vaqtini so'raydi:
+
+- Shablonlar: Hozir yuryapman, 30 daqiqa / 1–2 soat, Bugun kechqurun, Ertaga ertalab
+- **💾 Oxirgisi** — saqlangan matn bir bosishda
+- **⏰ Hozirgi soat** — Toshkent vaqti (`Bugun soat 16:30 da`)
+- **✍️ O'zim yozaman** — erkin matn (max 80 belgi)
+
+Tanlangan matn `last_departure_text` da saqlanadi, e'longa `🕐 …` qatori sifatida qo'shiladi (dublikat qilinmaydi). «🔁 Oxirgi e'lonni takrorlash» da saqlangan vaqt ishlatiladi; **Vaqtni o'zgartirish** tugmasi bor. Profilida ham ko'rish/o'zgartirish mumkin.
