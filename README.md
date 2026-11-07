@@ -140,3 +140,21 @@ Haydovchi e'loni guruhga rasm + qatorma-qator caption bilan chiqadi (`👤 Haydo
 ### Profilni tahrirlash
 
 **👤 Profilim** — ism, telefon, mashina, rang, raqam, joylar, yo'nalish, vaqt shabloni va rasm. Har maydon yonida **✏️** tugma: faqat shu maydon so'raladi, qolganlari o'zgarmaydi. Keyingi e'lonlarda yangi ma'lumot ishlatiladi; qayta registratsiya yo'q.
+
+### Avto-e'lon
+
+Panelda **⏰ Avto-e'lon**:
+
+1. Qaysi e'lon: **Oxirgisi** (standart) yoki **Yangi tashlang**
+2. Interval: **30 soniya** | **1 daqiqa** (standart: 1 daqiqa)
+3. Davomiylik: **1 / 2 / 3 soat** (standart: 2 soat, max `AUTO_POST_MAX_HOURS`)
+4. Tasdiq → yoqiladi; panelda **⏹ To'xtatish** / **🚫 Joy yo'q** ko'rinadi
+
+Har tickda e'lon hozirgi formatda (rasm, vaqt, telefon, Zakas) birinchi haydovchi-post guruhiga, keyin qolganlarga yuboriladi. `RELAY_REPOST_DELETE_OLD=true` bo'lsa: avval yangisi, keyin o'sha guruhdagi eski avto-xabar o'chiriladi. Bitta haydovchida bir vaqtda faqat 1 ta faol sessiya; holat DB da (`auto_post_sessions`) — bot restart dan keyin davom etadi. 429/guruh limiti kutib qayta urinadi, butun bot to'xtamaydi.
+
+| O'zgaruvchi | Ma'nosi |
+| --- | --- |
+| `AUTO_POST_INTERVALS_SEC` | Interval tanlovlari. Standart: `30,60` |
+| `AUTO_POST_DURATIONS_MIN` | Davomiylik (daqiqa). Standart: `60,120,180` |
+| `AUTO_POST_MAX_HOURS` | Maksimal soat. Standart: `3` |
+| `RELAY_REPOST_DELETE_OLD` | Eski avto-xabarni o'chirish. Standart: `true` |

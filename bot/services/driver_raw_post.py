@@ -112,20 +112,21 @@ async def _send_with_retry(
     text: str,
     photo_file_id: str | None,
     reply_markup: InlineKeyboardMarkup | None,
-) -> None:
+) -> int:
+    """Yuboradi va message_id qaytaradi."""
     attempts = 0
     while True:
         try:
             if photo_file_id:
-                await bot.send_photo(
+                msg = await bot.send_photo(
                     chat_id,
                     photo=photo_file_id,
                     caption=text or None,
                     reply_markup=reply_markup,
                 )
             else:
-                await bot.send_message(chat_id, text, reply_markup=reply_markup)
-            return
+                msg = await bot.send_message(chat_id, text, reply_markup=reply_markup)
+            return int(msg.message_id)
         except TelegramRetryAfter as exc:
             attempts += 1
             delay = float(exc.retry_after) + 0.05
@@ -146,7 +147,8 @@ async def send_one(
     chat_id: int,
     payload: RawPayload,
     driver: Driver,
-) -> None:
+) -> int:
+    """Guruhga yuboradi, message_id qaytaradi."""
     text = compose_body(
         payload.text,
         driver,
@@ -157,28 +159,28 @@ async def send_one(
     )
     photo = resolve_announce_photo(driver, payload.photo_file_id)
     markup = driver_announce_kb(driver)
-    await _send_with_retry(bot, chat_id, text, photo, markup)
+    return await _send_with_retry(bot, chat_id, text, photo, markup)
 
 
 async def post_to_main(
     bot: Bot,
     driver: Driver,
     payload: RawPayload,
-) -> tuple[int | None, str | None]:
-    """Birinchi guruhga darhol. (chat_id, None) yoki (None, error)."""
+) -> tuple[int | None, str | None, int | None]:
+    """Birinchi guruhga darhol. (chat_id, error, message_id)."""
     targets = post_targets()
     if not targets:
-        return None, "Guruhlar sozlanmagan"
+        return None, "Guruhlar sozlanmagan", None
     main = targets[0]
     try:
-        await send_one(bot, main, payload, driver)
-        return main, None
+        mid = await send_one(bot, main, payload, driver)
+        return main, None, mid
     except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter, TelegramNetworkError) as exc:
         logger.warning("raw post main fail %s: %s", main, exc)
-        return main, str(exc)
+        return main, str(exc), None
     except Exception as exc:  # noqa: BLE001
         logger.exception("raw post main unexpected %s", main)
-        return main, str(exc)
+        return main, str(exc), None
 
 
 async def post_to_rest(
@@ -187,24 +189,26 @@ async def post_to_rest(
     payload: RawPayload,
     *,
     skip_chat_ids: set[int] | None = None,
-) -> tuple[list[int], list[tuple[int, str]]]:
-    """Qolgan guruhlarga parallel."""
+) -> tuple[list[int], list[tuple[int, str]], dict[int, int]]:
+    """Qolgan guruhlarga parallel. Qaytaradi: ok, failed, {chat_id: message_id}."""
     skip = skip_chat_ids or set()
     rest = [cid for cid in post_targets() if cid not in skip]
     if not rest:
-        return [], []
+        return [], [], {}
     results = await asyncio.gather(
         *[_post_one_safe(bot, chat_id, payload, driver) for chat_id in rest],
         return_exceptions=False,
     )
     ok: list[int] = []
     failed: list[tuple[int, str]] = []
-    for chat_id, err in results:
-        if err is None:
+    ids: dict[int, int] = {}
+    for chat_id, err, mid in results:
+        if err is None and mid is not None:
             ok.append(chat_id)
+            ids[chat_id] = mid
         else:
-            failed.append((chat_id, err))
-    return ok, failed
+            failed.append((chat_id, err or "xato"))
+    return ok, failed, ids
 
 
 async def broadcast_raw(
@@ -215,14 +219,14 @@ async def broadcast_raw(
     ok: list[int] = []
     failed: list[tuple[int, str]] = []
 
-    main_id, main_err = await post_to_main(bot, driver, payload)
+    main_id, main_err, _mid = await post_to_main(bot, driver, payload)
     if main_id is not None and main_err is None:
         ok.append(main_id)
     elif main_id is not None:
         failed.append((main_id, main_err or "xato"))
 
     skip = {main_id} if main_id is not None else set()
-    rest_ok, rest_fail = await post_to_rest(bot, driver, payload, skip_chat_ids=skip)
+    rest_ok, rest_fail, _ids = await post_to_rest(bot, driver, payload, skip_chat_ids=skip)
     ok.extend(rest_ok)
     failed.extend(rest_fail)
 
@@ -238,16 +242,16 @@ async def _post_one_safe(
     chat_id: int,
     payload: RawPayload,
     driver: Driver,
-) -> tuple[int, str | None]:
+) -> tuple[int, str | None, int | None]:
     try:
-        await send_one(bot, chat_id, payload, driver)
-        return chat_id, None
+        mid = await send_one(bot, chat_id, payload, driver)
+        return chat_id, None, mid
     except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter, TelegramNetworkError) as exc:
         logger.warning("raw post fail %s: %s", chat_id, exc)
-        return chat_id, str(exc)
+        return chat_id, str(exc), None
     except Exception as exc:  # noqa: BLE001
         logger.exception("raw post unexpected %s", chat_id)
-        return chat_id, str(exc)
+        return chat_id, str(exc), None
 
 
 def format_result(ok: list[int], failed: list[tuple[int, str]]) -> str:

@@ -74,6 +74,7 @@ from bot.services.departure import (
     resolve_template,
     strip_departure_line,
 )
+from bot.services.auto_post import payload_to_dict
 from bot.services.driver_raw_post import (
     RawPayload,
     check_post_limit,
@@ -85,6 +86,22 @@ from bot.services.driver_raw_post import (
     record_post,
     save_last_raw,
 )
+
+
+async def _persist_last_announce(driver_id: int, payload: RawPayload) -> None:
+    """Xotira + DB (restart uchun)."""
+    from bot.database.db_requests import save_driver_last_announce
+    from bot.database.models import async_session_maker
+
+    save_last_raw(driver_id, payload)
+    try:
+        async with async_session_maker() as session:
+            await save_driver_last_announce(
+                session, driver_id, payload_to_dict(payload)
+            )
+            await session.commit()
+    except Exception:
+        logger.debug("persist last_announce fail", exc_info=True)
 from bot.services.notify import notify_admins
 from bot.states.order_states import (
     DriverAnnounce,
@@ -151,25 +168,57 @@ def _normalize_plate(raw: str) -> str | None:
     return number
 
 
-def _panel_kb(driver: Driver | int | None = None) -> "ReplyKeyboardMarkup":
+def _panel_kb(
+    driver: Driver | int | None = None,
+    *,
+    auto_active: bool | None = None,
+) -> "ReplyKeyboardMarkup":
     if isinstance(driver, Driver):
         uid = driver.telegram_id
+        from bot.services.auto_post import hydrate_last_raw
+
+        hydrate_last_raw(driver)
     elif isinstance(driver, int):
         uid = driver
     else:
         uid = None
     has_last = bool(uid and get_last_raw(uid))
-    return driver_panel_kb(has_last=has_last)
+    if auto_active is None and uid is not None:
+        from bot.services.auto_post import is_auto_active
+
+        auto_active = is_auto_active(uid)
+    return driver_panel_kb(has_last=has_last, auto_active=bool(auto_active))
 
 
 def driver_guide_text() -> str:
     return (
         "💡 <b>E'lon matnini shu yerga tashlang</b> — bot barcha guruhlarga yuboradi.\n"
-        "Yoki «📢 E'lon berish» tugmasidan foydalaning."
+        "Yoki «📢 E'lon berish» / «⏰ Avto-e'lon» tugmasidan foydalaning."
     )
 
 
 async def show_driver_panel(message: Message, driver: Driver) -> None:
+    from bot.database.db_requests import get_active_auto_post
+    from bot.database.models import async_session_maker
+    from bot.services.auto_post import hydrate_last_raw, set_auto_active
+
+    hydrate_last_raw(driver)
+    auto_line = ""
+    auto_on = False
+    try:
+        async with async_session_maker() as session:
+            active = await get_active_auto_post(session, driver.telegram_id)
+            auto_on = active is not None
+            set_auto_active(driver.telegram_id, auto_on)
+            if active is not None:
+                ends = active.ends_at.astimezone().strftime("%H:%M")
+                auto_line = (
+                    f"\n⏰ <b>Avto-e'lon yoqilgan</b> "
+                    f"(har {active.interval_sec}s, ~{ends} gacha)"
+                )
+    except Exception:
+        logger.debug("auto status panel fail", exc_info=True)
+
     extra = (
         f"📅 Obuna: {_fmt_until(driver.subscription_until)}"
         if driver.has_paid_subscription()
@@ -185,10 +234,10 @@ async def show_driver_panel(message: Message, driver: Driver) -> None:
         f"👤 {driver.full_name}\n"
         f"🚘 {driver.car_model or '—'} · {driver.car_number or '—'}\n"
         f"📞 {driver.phone or '—'}\n"
-        f"{extra}{miss_line}\n\n"
+        f"{extra}{miss_line}{auto_line}\n\n"
         f"{driver_guide_text()}\n\n"
         f"⭐ Asosiy guruh: <b>{settings.primary_group_title}</b>",
-        reply_markup=_panel_kb(driver),
+        reply_markup=_panel_kb(driver, auto_active=auto_on),
     )
 
 
@@ -435,6 +484,13 @@ async def announce_seats(message: Message, state: FSMContext, session: AsyncSess
         await state.clear()
         await message.answer("Profil topilmadi.", reply_markup=main_menu_kb())
         return
+    from bot.handlers.auto_post import looks_like_no_seats, maybe_stop_auto_for_no_seats
+    from bot.database.models import async_session_maker
+
+    if looks_like_no_seats(seats):
+        await maybe_stop_auto_for_no_seats(
+            message.bot, async_session_maker, user.id, seats
+        )
     await state.update_data(free_seats=seats)
     await state.set_state(DriverAnnounce.departure)
     await message.answer(
@@ -479,7 +535,7 @@ async def _publish_wizard_announce(
 
     ok: list[int] = []
     failed: list[tuple[int, str]] = []
-    main_id, main_err = await post_to_main(bot, driver, payload)
+    main_id, main_err, _mid = await post_to_main(bot, driver, payload)
     if main_id is not None and main_err is None:
         ok.append(main_id)
     elif main_id is not None:
@@ -487,11 +543,11 @@ async def _publish_wizard_announce(
 
     async def _rest() -> None:
         skip = {main_id} if main_id is not None else set()
-        rest_ok, rest_fail = await post_to_rest(bot, driver, payload, skip_chat_ids=skip)
+        rest_ok, rest_fail, _mids = await post_to_rest(bot, driver, payload, skip_chat_ids=skip)
         all_ok = ok + rest_ok
         all_fail = failed + rest_fail
         if all_ok:
-            save_last_raw(driver.telegram_id, payload)
+            await _persist_last_announce(driver.telegram_id, payload)
             record_post(driver.telegram_id)
         await bot.send_message(
             chat_id,
@@ -743,7 +799,7 @@ async def _dispatch_raw(
 
     ok: list[int] = []
     failed: list[tuple[int, str]] = []
-    main_id, main_err = await post_to_main(bot, driver, payload)
+    main_id, main_err, _mid = await post_to_main(bot, driver, payload)
     if main_id is not None and main_err is None:
         ok.append(main_id)
     elif main_id is not None:
@@ -751,13 +807,13 @@ async def _dispatch_raw(
 
     async def _rest() -> None:
         skip = {main_id} if main_id is not None else set()
-        rest_ok, rest_fail = await post_to_rest(
+        rest_ok, rest_fail, _mids = await post_to_rest(
             bot, driver, payload, skip_chat_ids=skip
         )
         all_ok = ok + rest_ok
         all_fail = failed + rest_fail
         if all_ok:
-            save_last_raw(driver.telegram_id, payload)
+            await _persist_last_announce(driver.telegram_id, payload)
             record_post(driver.telegram_id)
         await bot.send_message(
             chat_id,
@@ -1024,7 +1080,7 @@ async def raw_post_ok(
 
     ok: list[int] = []
     failed: list[tuple[int, str]] = []
-    main_id, main_err = await post_to_main(bot, driver, payload)
+    main_id, main_err, _mid = await post_to_main(bot, driver, payload)
     if main_id is not None and main_err is None:
         ok.append(main_id)
         await callback.answer("Yuborildi")
@@ -1036,13 +1092,13 @@ async def raw_post_ok(
 
     async def _rest() -> None:
         skip = {main_id} if main_id is not None else set()
-        rest_ok, rest_fail = await post_to_rest(
+        rest_ok, rest_fail, _mids = await post_to_rest(
             bot, driver, payload, skip_chat_ids=skip
         )
         all_ok = ok + rest_ok
         all_fail = failed + rest_fail
         if all_ok:
-            save_last_raw(driver.telegram_id, payload)
+            await _persist_last_announce(driver.telegram_id, payload)
             record_post(driver.telegram_id)
         await bot.send_message(
             chat_id,
@@ -1095,7 +1151,11 @@ async def show_profile_view(
     ask_ready: bool = False,
 ) -> None:
     """Profil matni + rasm preview + tahrir tugmalari."""
+    from bot.services.auto_post import is_auto_active
+
     text = _profile_text(driver)
+    if is_auto_active(driver.telegram_id):
+        text += "\n\n⏰ <b>Avto-e'lon yoqilgan</b>"
     kb = profile_edit_kb()
     panel = _panel_kb(driver)
     if driver.photo_file_id:

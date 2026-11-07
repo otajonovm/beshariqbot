@@ -23,6 +23,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bot.config import settings
 from bot.database.models import async_session_maker, dispose_db, init_db
 from bot.handlers.admin import router as admin_router
+from bot.handlers.auto_post import router as auto_post_router
 from bot.handlers.driver import router as driver_router
 from bot.handlers.group import router as group_router
 from bot.handlers.passenger import router as passenger_router
@@ -317,7 +318,8 @@ async def main() -> None:
     # Relay birinchi: yuborish DbSession ochilishidan oldin bajariladi.
     dp.update.outer_middleware(RelayMiddleware())
     dp.update.outer_middleware(DbSessionMiddleware())
-    # driver passenger dan oldin: e'lon yo'nalishi tugmalari chalkashmasin
+    # auto_post / driver passenger dan oldin: e'lon yo'nalishi tugmalari chalkashmasin
+    dp.include_router(auto_post_router)
     dp.include_router(driver_router)
     dp.include_router(passenger_router)
     dp.include_router(group_router)

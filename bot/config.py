@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     driver_raw_confirm: bool = Field(default=True)
     # Soatiga nechta xom/wizard e'lon (spam limati).
     driver_post_limit_per_hour: int = Field(default=20)
+    # Avto-e'lon
+    auto_post_intervals_sec: str = Field(default="30,60")
+    auto_post_durations_min: str = Field(default="60,120,180")
+    auto_post_max_hours: int = Field(default=3)
+    # Yangi avto-e'londan keyin eski xabarni o'chirish
+    relay_repost_delete_old: bool = Field(default=True)
     dedup_minutes: int = Field(default=10)
     relay_min_score: int = Field(default=3)
     relay_max_chars: int = Field(default=400)
@@ -83,6 +89,8 @@ class Settings(BaseSettings):
         "source_group_ids",
         "sweep_group_ids",
         "driver_post_group_ids",
+        "auto_post_intervals_sec",
+        "auto_post_durations_min",
         "use_webhook",
         "webhook_url",
         mode="before",
@@ -165,6 +173,29 @@ class Settings(BaseSettings):
             # masalan -4421198641
             value = int(f"-100{abs(value)}")
         return value
+
+    def _parse_int_list(self, raw: str) -> list[int]:
+        ids: list[int] = []
+        for part in (raw or "").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                ids.append(int(part))
+            except ValueError:
+                continue
+        return ids
+
+    @property
+    def auto_post_interval_choices(self) -> list[int]:
+        vals = self._parse_int_list(self.auto_post_intervals_sec) or [30, 60]
+        return sorted({max(15, v) for v in vals})
+
+    @property
+    def auto_post_duration_choices_min(self) -> list[int]:
+        cap = max(60, int(self.auto_post_max_hours) * 60)
+        vals = self._parse_int_list(self.auto_post_durations_min) or [60, 120, 180]
+        return sorted({min(cap, max(30, v)) for v in vals})
 
     @property
     def resolved_driver_post_group_ids(self) -> list[int]:

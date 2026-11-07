@@ -205,6 +205,19 @@ async def check_order_claim_timeouts(bot: Bot, session_maker: async_sessionmaker
 
 def setup_scheduler(bot: Bot, session_maker: async_sessionmaker) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
+    # 0. Avto-e'lon tick (30s interval uchun 10s tekshiruv)
+    from bot.services.auto_post import check_auto_posts
+
+    scheduler.add_job(
+        check_auto_posts,
+        trigger="interval",
+        seconds=10,
+        args=[bot, session_maker],
+        id="auto_post_check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     # 1. Obuna muddati va eslatmalar (har soatda)
     scheduler.add_job(
         check_driver_subscriptions,

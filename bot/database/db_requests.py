@@ -12,6 +12,8 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from bot.database.models import (
+    AutoPostSession,
+    AutoPostStatus,
     Driver,
     DriverStatus,
     Order,
@@ -748,3 +750,157 @@ async def get_leaderboard_data(
         total_parcel=total_parcel,
         top_drivers=top_drivers,
     )
+
+
+# ----- Avto-e'lon -----
+
+
+async def save_driver_last_announce(
+    session: AsyncSession,
+    driver_id: int,
+    payload: dict[str, Any],
+) -> None:
+    driver = await session.get(Driver, driver_id)
+    if driver is None:
+        return
+    driver.last_announce = {
+        "text": payload.get("text") or "",
+        "photo_file_id": payload.get("photo_file_id"),
+        "departure_text": payload.get("departure_text"),
+        "seats_hint": payload.get("seats_hint"),
+        "direction": payload.get("direction"),
+    }
+    flag_modified(driver, "last_announce")
+    await session.flush()
+
+
+async def get_active_auto_post(
+    session: AsyncSession,
+    driver_id: int,
+) -> AutoPostSession | None:
+    result = await session.execute(
+        select(AutoPostSession)
+        .where(
+            AutoPostSession.driver_id == driver_id,
+            AutoPostSession.status == AutoPostStatus.ACTIVE.value,
+        )
+        .order_by(AutoPostSession.id.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_due_auto_posts(
+    session: AsyncSession,
+    now: datetime | None = None,
+) -> list[AutoPostSession]:
+    now = now or utcnow()
+    # Tugaganlarni ham olib, keyin finish qilamiz
+    result = await session.execute(
+        select(AutoPostSession).where(
+            AutoPostSession.status == AutoPostStatus.ACTIVE.value
+        )
+    )
+    rows = list(result.scalars().all())
+    due: list[AutoPostSession] = []
+    for row in rows:
+        if row.ends_at <= now:
+            due.append(row)
+            continue
+        last = row.last_sent_at
+        if last is None:
+            due.append(row)
+            continue
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=row.ends_at.tzinfo)
+        elapsed = (now - last).total_seconds()
+        if elapsed >= max(15, int(row.interval_sec)):
+            due.append(row)
+    return due
+
+
+async def start_auto_post(
+    session: AsyncSession,
+    *,
+    driver_id: int,
+    interval_sec: int,
+    duration_min: int,
+    text: str,
+    photo_file_id: str | None,
+    departure_text: str | None,
+    seats_hint: str | None,
+    direction: str | None,
+) -> AutoPostSession:
+    # Eski faol sessiyani to'xtat
+    existing = await get_active_auto_post(session, driver_id)
+    if existing is not None:
+        existing.status = AutoPostStatus.STOPPED.value
+        existing.stop_reason = "replaced"
+
+    now = utcnow()
+    max_h = 3
+    try:
+        from bot.config import settings
+
+        max_h = max(1, int(settings.auto_post_max_hours))
+    except Exception:
+        pass
+    duration_min = min(max(30, duration_min), max_h * 60)
+    # last_sent_at=now: scheduler darhol qayta yubormasin;
+    # birinchi yuborishni handler o'zi chaqiradi.
+    sess = AutoPostSession(
+        driver_id=driver_id,
+        interval_sec=max(15, interval_sec),
+        started_at=now,
+        ends_at=now + timedelta(minutes=duration_min),
+        last_sent_at=now,
+        status=AutoPostStatus.ACTIVE.value,
+        text=text or "",
+        photo_file_id=photo_file_id,
+        departure_text=departure_text,
+        seats_hint=seats_hint,
+        direction=direction,
+        message_ids={},
+        rate_notified=False,
+    )
+    session.add(sess)
+    await session.flush()
+    return sess
+
+
+async def stop_auto_post(
+    session: AsyncSession,
+    driver_id: int,
+    *,
+    reason: str = "manual",
+) -> AutoPostSession | None:
+    sess = await get_active_auto_post(session, driver_id)
+    if sess is None:
+        return None
+    sess.status = (
+        AutoPostStatus.FINISHED.value
+        if reason in {"expired", "no_seats"}
+        else AutoPostStatus.STOPPED.value
+    )
+    sess.stop_reason = reason
+    await session.flush()
+    return sess
+
+
+async def update_auto_post_after_send(
+    session: AsyncSession,
+    session_id: int,
+    *,
+    message_ids: dict[str | int, int],
+    sent_at: datetime | None = None,
+    rate_notified: bool | None = None,
+) -> None:
+    sess = await session.get(AutoPostSession, session_id)
+    if sess is None:
+        return
+    sess.last_sent_at = sent_at or utcnow()
+    sess.message_ids = {str(k): int(v) for k, v in message_ids.items()}
+    flag_modified(sess, "message_ids")
+    if rate_notified is not None:
+        sess.rate_notified = rate_notified
+    await session.flush()

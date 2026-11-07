@@ -142,6 +142,8 @@ class Driver(Base):
     last_departure_text: Mapped[str | None] = mapped_column(String(120), nullable=True)
     # Ixtiyoriy default yo'nalish: beshariq_tashkent | tashkent_beshariq
     preferred_direction: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Oxirgi e'lon payload (restart uchun): text, photo, departure, seats, direction
+    last_announce: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     trial_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     subscription_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -250,6 +252,41 @@ class Driver(Base):
             DriverStatus.ACTIVE.value,
             DriverStatus.EXPIRED.value,
         }
+
+
+class AutoPostStatus(str, Enum):
+    ACTIVE = "active"
+    STOPPED = "stopped"
+    FINISHED = "finished"
+
+
+class AutoPostSession(Base):
+    """Haydovchi avto-e'lon sessiyasi (restartga chidamli)."""
+
+    __tablename__ = "auto_post_sessions"
+    __table_args__ = (Index("ix_auto_post_status_ends", "status", "ends_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    driver_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    interval_sec: Mapped[int] = mapped_column(Integer, default=60)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), default=AutoPostStatus.ACTIVE.value, index=True
+    )
+    stop_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # E'lon payload
+    text: Mapped[str] = mapped_column(Text, default="")
+    photo_file_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    departure_text: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    seats_hint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    direction: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # chat_id (str) -> message_id
+    message_ids: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    rate_notified: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Order(Base):
@@ -506,6 +543,7 @@ async def init_db() -> None:
                 ("photo_file_id", "VARCHAR(256)"),
                 ("last_departure_text", "VARCHAR(120)"),
                 ("preferred_direction", "VARCHAR(32)"),
+                ("last_announce", "JSON" if dialect == "postgresql" else "TEXT"),
             ]
             for col_name, col_type in profile_columns:
                 if col_name not in driver_cols:

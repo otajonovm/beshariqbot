@@ -62,6 +62,18 @@ class DriverProfileEdit(StatesGroup):
     custom_time = State()
 
 
+class DriverAutoPost(StatesGroup):
+    """Avto-e'lon: manba → interval → davomiylik → tasdiq."""
+
+    source = State()
+    waiting_new = State()
+    new_departure = State()
+    new_custom_time = State()
+    interval = State()
+    duration = State()
+    confirm = State()
+
+
 class AdminExtend(StatesGroup):
     driver_id = State()
     days = State()
