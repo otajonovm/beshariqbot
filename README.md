@@ -24,6 +24,7 @@ relay delay_ms=180 since_msg_ms=240 chat_id=... message_id=...
 | `PRIMARY_GROUP_ID` | Mavjud 426. Global guruh. `MAIN_GROUP_ID` berilmasa shu ishlatiladi |
 | `MAIN_GROUP_ID` | Yo'naltirish tushadigan guruh. Bo'sh bo'lsa `PRIMARY_GROUP_ID` |
 | `SOURCE_GROUP_IDS` | Qaysi guruhlardan olinadi. Bo'sh bo'lsa — bot turgan barcha guruhlar, asosiydan tashqari |
+| `SWEEP_GROUP_IDS` | Admin emas yozsa xabar **darhol o'chirilib** asosiy guruhga o'tkaziladi. Standart: `-1003189462638` |
 | `SUPERGROUP_IDS` | Eski buyurtma/admin guruhlari ro'yxati (yo'naltirishdan alohida) |
 | `DEDUP_MINUTES` | Bir odam bir xil matnni shu daqiqa ichida faqat bir marta yuboradi. Standart: `10` |
 | `RELAY_MIN_SCORE` | Yo'lovchi balli chegarasi. Standart: `3` |

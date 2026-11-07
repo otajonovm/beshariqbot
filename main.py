@@ -26,6 +26,7 @@ from bot.handlers.admin import router as admin_router
 from bot.handlers.driver import router as driver_router
 from bot.handlers.group import router as group_router
 from bot.handlers.passenger import router as passenger_router
+from bot.relay.admins import admin_cache
 from bot.relay.middleware import RelayMiddleware
 from bot.relay.service import dedup
 from bot.relay.store import load_keywords, warm_dedup
@@ -86,7 +87,7 @@ class DbSessionMiddleware(BaseMiddleware):
 
 def allowed_updates(dp: Dispatcher) -> list[str]:
     found = list(dp.resolve_used_update_types())
-    for name in ("message", "callback_query", "my_chat_member"):
+    for name in ("message", "callback_query", "my_chat_member", "chat_member"):
         if name not in found:
             found.append(name)
     return [name for name in found if name not in _SKIP_UPDATES]
@@ -115,11 +116,17 @@ async def prepare(bot: Bot, scheduler: AsyncIOScheduler) -> None:
     try:
         await load_keywords()
         await warm_dedup(dedup, settings.dedup_minutes)
+        for chat_id in settings.resolved_sweep_group_ids:
+            try:
+                await admin_cache.refresh(bot, chat_id)
+            except Exception:
+                logger.exception("Sweep admin kesh yuklanmadi chat=%s", chat_id)
         sources = settings.resolved_source_group_ids
         logger.info(
-            "Relay tayyor: main=%s sources=%s dedup_min=%s",
+            "Relay tayyor: main=%s sources=%s sweep=%s dedup_min=%s",
             settings.resolved_main_group_id,
             "ALL" if sources is None else sources,
+            sorted(settings.resolved_sweep_group_ids),
             settings.dedup_minutes,
         )
     except Exception:

@@ -26,6 +26,7 @@ class RelayCard:
     message_id: int
     body: str
     phones: list[str]
+    hide_origin: bool = False
 
 
 def contact_url(user_id: int, username: str | None) -> str:
@@ -69,8 +70,9 @@ def render(card: RelayCard) -> tuple[str, InlineKeyboardMarkup]:
             url=contact_url(card.user_id, username),
         )
     ]
-    origin = message_url(card.chat_id, card.message_id, card.chat_username)
-    if origin:
-        buttons.append(InlineKeyboardButton(text="🔗 Asl xabar", url=origin))
+    if not card.hide_origin:
+        origin = message_url(card.chat_id, card.message_id, card.chat_username)
+        if origin:
+            buttons.append(InlineKeyboardButton(text="🔗 Asl xabar", url=origin))
     markup = InlineKeyboardMarkup(inline_keyboard=[buttons])
     return "\n".join(lines), markup

@@ -39,9 +39,14 @@ async def create_driver_invite_links(_bot: Bot) -> list[str]:
 async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
     if event.chat.type not in {"group", "supergroup"}:
         return
+    from bot.relay.admins import admin_cache
+    from bot.relay.service import note_group
+
+    user = event.new_chat_member.user
+    if user is not None:
+        admin_cache.apply_status(event.chat.id, user.id, event.new_chat_member.status)
     if event.new_chat_member.status not in {"administrator", "member", "creator"}:
         return
-    from bot.relay.service import note_group
 
     note_group(event.chat.id, event.chat.title or "", event.new_chat_member.status)
     known = event.chat.id in settings.group_ids
@@ -53,6 +58,21 @@ async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
         f"ID: <code>{event.chat.id}</code>\n"
         f"{'✅ Sozlamada bor' if known else '⚠️ SUPERGROUP_IDS ga qo\'shilmagan'}",
     )
+
+
+@router.chat_member()
+async def on_chat_member(event: ChatMemberUpdated) -> None:
+    """Admin o'zgarsa sweep keshini yangilaydi."""
+    if event.chat.type not in {"group", "supergroup"}:
+        return
+    if event.chat.id not in settings.resolved_sweep_group_ids:
+        return
+    from bot.relay.admins import admin_cache
+
+    user = event.new_chat_member.user
+    if user is None:
+        return
+    admin_cache.apply_status(event.chat.id, user.id, event.new_chat_member.status)
 
 
 async def _send_card(

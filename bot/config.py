@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     main_group_id: int | None = Field(default=None)
     # Bo'sh bo'lsa — bot turgan barcha guruhlar (asosiy guruhdan tashqari).
     source_group_ids: str = Field(default="")
+    # Admin bo'lmaganlarning xabari o'chirilib asosiy guruhga o'tkaziladi.
+    sweep_group_ids: str = Field(default="-1003189462638")
     dedup_minutes: int = Field(default=10)
     relay_min_score: int = Field(default=3)
     relay_max_chars: int = Field(default=400)
@@ -65,7 +67,14 @@ class Settings(BaseSettings):
     def strip_token(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("supergroup_ids", "source_group_ids", "use_webhook", "webhook_url", mode="before")
+    @field_validator(
+        "supergroup_ids",
+        "source_group_ids",
+        "sweep_group_ids",
+        "use_webhook",
+        "webhook_url",
+        mode="before",
+    )
     @classmethod
     def strip_ids(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
@@ -194,6 +203,23 @@ class Settings(BaseSettings):
                 ids.append(value)
         return ids
 
+    @property
+    def resolved_sweep_group_ids(self) -> set[int]:
+        """Admin emas yozsa → o'chirib asosiy guruhga o'tkaziladigan guruhlar."""
+        main = self.resolved_main_group_id
+        ids: set[int] = set()
+        for part in (self.sweep_group_ids or "").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                value = int(part)
+            except ValueError:
+                continue
+            if value != main:
+                ids.add(value)
+        return ids
+
     def webhook_base(self) -> str | None:
         """Webhook ildiz URL. Polling kerak bo'lsa None."""
         mode = (self.use_webhook or "auto").strip().lower()
@@ -209,7 +235,7 @@ class Settings(BaseSettings):
                 or ""
             ).strip().rstrip("/")
             if domain:
-                if domain.startswith("http://") or domain.startswith("https://"):
+                if domain.startswith(("http://", "https://")):
                     return domain
                 return f"https://{domain}"
         return None
