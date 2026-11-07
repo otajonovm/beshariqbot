@@ -131,4 +131,8 @@ E'lon (raw yoki «📢 E'lon berish») yuborishdan oldin bot ketish vaqtini so'r
 - **⏰ Hozirgi soat** — Toshkent vaqti (`Bugun soat 16:30 da`)
 - **✍️ O'zim yozaman** — erkin matn (max 80 belgi)
 
-Tanlangan matn `last_departure_text` da saqlanadi, e'longa `🕐 …` qatori sifatida qo'shiladi (dublikat qilinmaydi). «🔁 Oxirgi e'lonni takrorlash» da saqlangan vaqt ishlatiladi; **Vaqtni o'zgartirish** tugmasi bor. Profilida ham ko'rish/o'zgartirish mumkin.
+Tanlangan matn `last_departure_text` da saqlanadi. «🔁 Oxirgi e'lonni takrorlash» da saqlangan vaqt ishlatiladi; **Vaqtni o'zgartirish** tugmasi bor. Profilida ham ko'rish/o'zgartirish mumkin.
+
+### Guruhdagi e'lon stili
+
+Haydovchi e'loni guruhga rasm + qatorma-qator caption bilan chiqadi (`👤 Haydovchi: HOZIRGA`, yo'nalish, joy, pochta, avto, tel…). Inline tugmalar: **🚖 Zakas berish** (bot lichkasida haydovchiga xabar) va **📞 +998…** (WhatsApp/qo'ng'iroq havolasi; telefon yo'q bo'lsa **✍️ Yozish**).

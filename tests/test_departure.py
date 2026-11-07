@@ -56,7 +56,7 @@ def test_strip_and_has_line():
     assert not has_departure_line("Cobalt joy bor", "Hozir yuryapman")
 
 
-def test_compose_body_prepends_departure():
+def test_compose_body_uses_card_style():
     driver = Driver(
         telegram_id=1,
         full_name="Test",
@@ -71,6 +71,6 @@ def test_compose_body_prepends_departure():
         driver,
         departure_text="Hozir yuryapman",
     )
-    assert out.startswith("🕐 Hozir yuryapman")
-    assert "Beshariq Toshkent 2 joy" in out
-    assert "Bot orqali" in out
+    assert "HOZIRGA" in out
+    assert "2 ta JOY BOR" in out
+    assert "BESHARIQDAN TOSHKENTGA" in out

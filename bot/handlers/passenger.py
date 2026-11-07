@@ -6,9 +6,16 @@ import logging
 import re
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    User,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.db_requests import create_order, get_driver, upsert_user
@@ -23,6 +30,8 @@ from bot.keyboards.default_kb import (
     main_menu_kb,
 )
 from bot.keyboards.inline_kb import seats_kb, skip_photo_kb
+from bot.relay.card import contact_url
+from bot.services.driver_card import normalize_uz_phone, phone_tel_url
 from bot.states.order_states import DriverAnnounce, ParcelOrder, TaxiOrder
 
 logger = logging.getLogger(__name__)
@@ -31,6 +40,75 @@ router.message.filter(F.chat.type == "private")
 router.callback_query.filter(F.message.chat.type == "private")
 
 PHONE_RE = re.compile(r"^\+?\d{9,15}$")
+
+
+async def _handle_driver_book(
+    message: Message,
+    session,
+    user: User,
+    payload: str,
+) -> None:
+    """Guruhdagi «Zakas berish» — haydovchiga xabar + mijozga telefon."""
+    try:
+        driver_id = int(payload.split("_", 1)[1])
+    except (ValueError, IndexError):
+        await message.answer("Noto'g'ri havola.", reply_markup=main_menu_kb())
+        return
+    driver = await get_driver(session, driver_id)
+    if driver is None or not driver.is_legacy_or_approved() or not driver.is_access_valid():
+        await message.answer(
+            "Haydovchi topilmadi yoki hozir band emas.",
+            reply_markup=main_menu_kb(),
+        )
+        return
+
+    uname = f"@{user.username}" if user.username else "—"
+    try:
+        await message.bot.send_message(
+            driver_id,
+            "📩 <b>Yangi zakas so'rovi</b>\n\n"
+            f"Mijoz e'loningizga qiziqdi.\n"
+            f"👤 {user.full_name}\n"
+            f"🆔 <code>{user.id}</code>\n"
+            f"🔗 {uname}\n\n"
+            "Tez orada bog'laning yoki javob yozing.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✍️ Mijozga yozish",
+                            url=contact_url(user.id, user.username),
+                        )
+                    ]
+                ]
+            ),
+        )
+    except TelegramForbiddenError:
+        logger.info("Haydovchiga zakas xabari yetmadi driver=%s", driver_id)
+
+    phone = normalize_uz_phone(driver.phone)
+    lines = [
+        f"✅ <b>{driver.full_name}</b> haydovchiga xabar yuborildi.",
+        f"🚘 {driver.car_model} · {driver.car_number}",
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    if phone:
+        lines.append(f"☎️ <code>{phone}</code>")
+        rows.append(
+            [InlineKeyboardButton(text=f"📞 {phone}", url=phone_tel_url(phone))]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="✍️ Haydovchiga yozish",
+                url=contact_url(driver.telegram_id, driver.username),
+            )
+        ]
+    )
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
 
 
 def _normalize_phone(raw: str) -> str | None:
@@ -92,6 +170,11 @@ async def cmd_start(
             message.bot, session, order_id=order_id, user=user
         )
         await message.answer(result_text, reply_markup=main_menu_kb())
+        return
+
+    # Haydovchi e'lonidagi "Zakas berish" → t.me/bot?start=book_<driver_id>
+    if payload.startswith("book_"):
+        await _handle_driver_book(message, session, user, payload)
         return
 
     # Mavjud tasdiqlangan haydovchi — qayta ro'yxat YO'Q, darhol panel.

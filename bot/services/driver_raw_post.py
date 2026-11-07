@@ -7,7 +7,6 @@ import logging
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from html import escape
 
 from aiogram import Bot
 from aiogram.exceptions import (
@@ -16,16 +15,20 @@ from aiogram.exceptions import (
     TelegramNetworkError,
     TelegramRetryAfter,
 )
+from aiogram.types import InlineKeyboardMarkup
 
 from bot.config import settings
 from bot.database.models import Driver
-from bot.services.departure import apply_departure
+from bot.services.driver_card import (
+    driver_announce_kb,
+    format_driver_caption,
+    resolve_announce_photo,
+)
 
 logger = logging.getLogger(__name__)
 
 TEXT_LIMIT = 4096
 CAPTION_LIMIT = 1024
-FOOTER_MARK = "Bot orqali"
 
 
 @dataclass(slots=True)
@@ -33,6 +36,8 @@ class RawPayload:
     text: str
     photo_file_id: str | None = None
     departure_text: str | None = None
+    seats_hint: str | None = None
+    direction: str | None = None
 
 
 # telegram_id -> oxirgi muvaffaqiyatli e'lon
@@ -51,6 +56,8 @@ def save_last_raw(driver_id: int, payload: RawPayload) -> None:
         text=payload.text,
         photo_file_id=payload.photo_file_id,
         departure_text=payload.departure_text,
+        seats_hint=payload.seats_hint,
+        direction=payload.direction,
     )
 
 
@@ -71,44 +78,27 @@ def record_post(driver_id: int, now: float | None = None) -> None:
     _post_times[driver_id].append(time.monotonic() if now is None else now)
 
 
-def build_footer(driver: Driver) -> str:
-    parts: list[str] = []
-    phone = (driver.phone or "").strip()
-    if phone and phone not in {"—", "-"}:
-        parts.append(f"📞 {escape(phone)}")
-    username = (driver.username or "").strip().lstrip("@")
-    if username:
-        parts.append(f"@{escape(username)}")
-    line = " · ".join(parts)
-    if line:
-        return f"\n\n{line}\n{FOOTER_MARK}"
-    return f"\n\n{FOOTER_MARK}"
-
-
 def compose_body(
     raw_text: str,
     driver: Driver,
     *,
     for_caption: bool = False,
     departure_text: str | None = None,
+    seats_hint: str | None = None,
+    direction: str | None = None,
 ) -> str:
-    """Asl matn saqlanadi; vaqt qatori alohida; footer sig'masa tashlanadi."""
+    """Guruh stilidagi caption (preview va yuborish bir xil)."""
+    _ = for_caption  # har doim caption limiti
     dep = departure_text if departure_text is not None else getattr(
         driver, "last_departure_text", None
     )
-    body = apply_departure(raw_text or "", dep)
-    limit = CAPTION_LIMIT if for_caption else TEXT_LIMIT
-    footer = build_footer(driver)
-    escaped = escape(body) if body else ""
-    if escaped:
-        candidate = escaped + footer
-    else:
-        candidate = footer.lstrip("\n")
-    if len(candidate) <= limit:
-        return candidate
-    if escaped and len(escaped) <= limit:
-        return escaped
-    return escaped or body
+    return format_driver_caption(
+        driver,
+        raw_text,
+        departure_text=dep,
+        seats_hint=seats_hint,
+        direction=direction,
+    )
 
 
 def post_targets() -> list[int]:
@@ -121,6 +111,7 @@ async def _send_with_retry(
     chat_id: int,
     text: str,
     photo_file_id: str | None,
+    reply_markup: InlineKeyboardMarkup | None,
 ) -> None:
     attempts = 0
     while True:
@@ -130,9 +121,10 @@ async def _send_with_retry(
                     chat_id,
                     photo=photo_file_id,
                     caption=text or None,
+                    reply_markup=reply_markup,
                 )
             else:
-                await bot.send_message(chat_id, text)
+                await bot.send_message(chat_id, text, reply_markup=reply_markup)
             return
         except TelegramRetryAfter as exc:
             attempts += 1
@@ -155,14 +147,17 @@ async def send_one(
     payload: RawPayload,
     driver: Driver,
 ) -> None:
-    for_caption = bool(payload.photo_file_id)
     text = compose_body(
         payload.text,
         driver,
-        for_caption=for_caption,
+        for_caption=True,
         departure_text=payload.departure_text,
+        seats_hint=payload.seats_hint,
+        direction=payload.direction,
     )
-    await _send_with_retry(bot, chat_id, text, payload.photo_file_id)
+    photo = resolve_announce_photo(driver, payload.photo_file_id)
+    markup = driver_announce_kb(driver)
+    await _send_with_retry(bot, chat_id, text, photo, markup)
 
 
 async def post_to_main(
@@ -170,7 +165,7 @@ async def post_to_main(
     driver: Driver,
     payload: RawPayload,
 ) -> tuple[int | None, str | None]:
-    """Asosiy guruhga darhol. (chat_id, None) yoki (None, error)."""
+    """Birinchi guruhga darhol. (chat_id, None) yoki (None, error)."""
     targets = post_targets()
     if not targets:
         return None, "Guruhlar sozlanmagan"
@@ -193,7 +188,7 @@ async def post_to_rest(
     *,
     skip_chat_ids: set[int] | None = None,
 ) -> tuple[list[int], list[tuple[int, str]]]:
-    """Qolgan guruhlarga parallel (asosiy allaqachon yuborilgan deb)."""
+    """Qolgan guruhlarga parallel."""
     skip = skip_chat_ids or set()
     rest = [cid for cid in post_targets() if cid not in skip]
     if not rest:
@@ -217,10 +212,6 @@ async def broadcast_raw(
     driver: Driver,
     payload: RawPayload,
 ) -> tuple[list[int], list[tuple[int, str]]]:
-    """
-    Asosiy guruhga darhol, qolganlariga parallel.
-    Qaytaradi: (ok_ids, [(fail_id, reason), ...]).
-    """
     ok: list[int] = []
     failed: list[tuple[int, str]] = []
 

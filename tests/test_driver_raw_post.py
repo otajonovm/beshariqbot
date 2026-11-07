@@ -1,4 +1,4 @@
-"""Xom e'lon: footer, limit, guruh tartibi."""
+"""Xom e'lon: stil, limit, guruh tartibi."""
 
 from __future__ import annotations
 
@@ -20,23 +20,19 @@ def _driver(**kwargs) -> Driver:
     return Driver(**base)
 
 
-def test_compose_keeps_original_text():
+def test_compose_card_style():
     driver = _driver()
-    body = raw.compose_body("Beshariqdan 2 joy\nNarxi 200000", driver)
-    assert "Beshariqdan 2 joy" in body
-    assert "Narxi 200000" in body
-    assert "Bot orqali" in body
+    body = raw.compose_body(
+        "Beshariqdan 2 joy\nNarxi 200000",
+        driver,
+        departure_text="Hozir yuryapman",
+    )
+    assert "HOZIRGA" in body
+    assert "2 ta JOY BOR" in body
+    assert "BESHARIQ" in body.upper() or "Beshariq" in body
     assert "+998901112233" in body
-    assert "@test_driver" in body
-
-
-def test_compose_skips_footer_if_too_long():
-    driver = _driver()
-    huge = "A" * 4090
-    body = raw.compose_body(huge, driver)
-    assert body.startswith("A" * 100)
-    assert "Bot orqali" not in body
-    assert len(body) <= 4096
+    assert "Test Haydovchi" in body
+    assert "Cobalt" in body
 
 
 def test_post_limit_blocks_after_quota(monkeypatch):
@@ -49,7 +45,6 @@ def test_post_limit_blocks_after_quota(monkeypatch):
     ok, wait = raw.check_post_limit(uid, now=120.0)
     assert ok is False
     assert wait > 0
-    # Soat o'tgach yana ruxsat
     ok2, _ = raw.check_post_limit(uid, now=100.0 + 3600.0)
     assert ok2 is True
 
@@ -73,7 +68,7 @@ def test_format_result_mentions_failures():
 
 def test_driver_posts_skip_426_global_include_others():
     targets = raw.post_targets()
-    primary = -1003956911813  # 426. Global — faqat taksi hub
+    primary = -1003956911813
     assert primary not in targets
     assert -1004421198641 in targets
     for cid in raw.settings.group_ids:

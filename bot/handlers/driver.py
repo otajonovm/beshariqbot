@@ -447,40 +447,43 @@ async def _publish_wizard_announce(
     driver.last_departure_text = departure
 
     origin, dest = DIRECTION_LABELS.get(direction, ("Beshariq", "Toshkent"))
-    color = f" · {driver.car_color}" if driver.car_color else ""
-    text = (
-        f"📢 <b>Haydovchi e'loni</b>\n\n"
-        f"🕐 {departure}\n"
-        f"👤 <b>{driver.full_name}</b>\n"
-        f"🚘 {driver.car_model} · <code>{driver.car_number}</code>{color}\n"
-        f"📍 {origin} ➡️ {dest}\n"
-        f"👥 Bo'sh joy: <b>{seats}</b>\n"
-        f"📞 <code>{driver.phone}</code>"
+    # Stil parser uchun qisqa matn (vaqt alohida ketadi)
+    seed = f"{origin}dan {dest}ga {seats} joy bor"
+    payload = RawPayload(
+        text=seed,
+        photo_file_id=driver.photo_file_id,
+        departure_text=departure,
+        seats_hint=str(seats),
+        direction=direction,
     )
-    posted = 0
-    for chat_id in settings.resolved_driver_post_group_ids:
-        try:
-            if driver.photo_file_id:
-                await message.bot.send_photo(
-                    chat_id, photo=driver.photo_file_id, caption=text
-                )
-            else:
-                await message.bot.send_message(chat_id, text)
-            posted += 1
-        except (TelegramBadRequest, TelegramForbiddenError) as exc:
-            logger.warning("E'lon yuborilmadi %s: %s", chat_id, exc)
 
+    bot = message.bot
+    chat_id = message.chat.id
     await state.clear()
-    if posted:
-        await message.answer(
-            f"✅ E'lon {posted} ta guruhga yuborildi.",
+
+    ok: list[int] = []
+    failed: list[tuple[int, str]] = []
+    main_id, main_err = await post_to_main(bot, driver, payload)
+    if main_id is not None and main_err is None:
+        ok.append(main_id)
+    elif main_id is not None:
+        failed.append((main_id, main_err or "xato"))
+
+    async def _rest() -> None:
+        skip = {main_id} if main_id is not None else set()
+        rest_ok, rest_fail = await post_to_rest(bot, driver, payload, skip_chat_ids=skip)
+        all_ok = ok + rest_ok
+        all_fail = failed + rest_fail
+        if all_ok:
+            save_last_raw(driver.telegram_id, payload)
+            record_post(driver.telegram_id)
+        await bot.send_message(
+            chat_id,
+            format_result(all_ok, all_fail),
             reply_markup=_panel_kb(driver),
         )
-    else:
-        await message.answer(
-            "E'lon yuborilmadi. Bot guruhlarda admin ekanini tekshiring.",
-            reply_markup=_panel_kb(driver),
-        )
+
+    asyncio.create_task(_rest(), name=f"wizard-post-{driver.telegram_id}")
 
 
 @router.callback_query(DriverAnnounce.departure, F.data.startswith("adep:"))
@@ -643,24 +646,24 @@ async def _show_raw_preview(
         raw_photo=photo_file_id,
         departure_text=departure,
     )
+    from bot.services.driver_card import resolve_announce_photo
+
     preview = compose_body(
         raw_text,
         driver,
-        for_caption=bool(photo_file_id),
+        for_caption=True,
         departure_text=departure,
     )
-    header = "👀 <b>Oldindan ko'rish</b>\nGuruhlarga shunday chiqadi:\n\n"
-    if photo_file_id:
+    photo = resolve_announce_photo(driver, photo_file_id)
+    await message.answer("👀 <b>Oldindan ko'rish</b> — guruhda shunday chiqadi:")
+    if photo:
         await message.answer_photo(
-            photo=photo_file_id,
-            caption=(header + (preview or "📷")).strip()[:1024],
+            photo=photo,
+            caption=(preview or "📷")[:1024],
             reply_markup=raw_post_confirm_kb(),
         )
     else:
-        await message.answer(
-            header + (preview or "—"),
-            reply_markup=raw_post_confirm_kb(),
-        )
+        await message.answer(preview or "—", reply_markup=raw_post_confirm_kb())
     await message.answer(
         "Tasdiqlang, vaqtni o'zgartiring yoki bekor qiling.",
         reply_markup=_panel_kb(driver),
