@@ -114,7 +114,10 @@ async def update_driver_fields(
     seats_count: int | None = None,
     photo_file_id: str | None = None,
     last_departure_text: str | None = None,
+    preferred_direction: str | None = None,
     clear_photo: bool = False,
+    clear_direction: bool = False,
+    clear_color: bool = False,
 ) -> Driver | None:
     """Mavjud haydovchi maydonlarini to'ldirish. Bo'sh qiymat ustiga yozilmaydi."""
     driver = await session.get(Driver, telegram_id)
@@ -130,7 +133,9 @@ async def update_driver_fields(
         driver.car_number = number
     if (phone_v := _nonempty(phone)) is not None:
         driver.phone = phone_v
-    if (color := _nonempty(car_color)) is not None:
+    if clear_color:
+        driver.car_color = None
+    elif (color := _nonempty(car_color)) is not None:
         driver.car_color = color
     if seats_count is not None and seats_count > 0:
         driver.seats_count = seats_count
@@ -142,6 +147,10 @@ async def update_driver_fields(
         cleaned = last_departure_text.strip()
         if cleaned:
             driver.last_departure_text = cleaned[:120]
+    if clear_direction:
+        driver.preferred_direction = None
+    elif preferred_direction is not None:
+        driver.preferred_direction = preferred_direction.strip() or None
     await session.flush()
     return driver
 

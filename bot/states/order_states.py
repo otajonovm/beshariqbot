@@ -48,9 +48,17 @@ class DriverRawPost(StatesGroup):
 
 
 class DriverDepartureEdit(StatesGroup):
-    """Profil: ketish vaqti shablonini o'zgartirish."""
+    """Profil: ketish vaqti shablonini o'zgartirish (eski callbacklar)."""
 
     picking = State()
+    custom_time = State()
+
+
+class DriverProfileEdit(StatesGroup):
+    """Profil: bitta maydonni tahrirlash."""
+
+    waiting = State()
+    picking_time = State()
     custom_time = State()
 
 

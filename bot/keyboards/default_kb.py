@@ -13,8 +13,11 @@ BTN_PROFILE = "👤 Profilim"
 BTN_PASSENGER_MENU = "🏠 Yo'lovchi menyusi"
 BTN_DRIVER_GROUPS = "⭐ Guruhlar"
 BTN_CANCEL = "⬅️ Bekor qilish"
+BTN_BACK = "⬅️ Orqaga"
+BTN_ABORT = "❌ Bekor qilish"
 BTN_SKIP = "⏭ O'tkazib yuborish"
 BTN_SHARE_CONTACT = "📲 Raqamni yuborish"
+BTN_DELETE_PHOTO = "🗑 Rasmni o'chirish"
 
 # Panel / menyu tugmalari — xom e'lon deb olinmasin
 DRIVER_PANEL_TEXTS = {
@@ -31,8 +34,11 @@ RESERVED_PRIVATE_TEXTS = DRIVER_PANEL_TEXTS | {
     BTN_DRIVER,
     BTN_BECOME_DRIVER,
     BTN_CANCEL,
+    BTN_BACK,
+    BTN_ABORT,
     BTN_SKIP,
     BTN_SHARE_CONTACT,
+    BTN_DELETE_PHOTO,
 }
 
 DIRECTION_BY_BTN = {
@@ -101,6 +107,24 @@ def skip_kb() -> ReplyKeyboardMarkup:
 def cancel_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=BTN_CANCEL)]],
+        resize_keyboard=True,
+    )
+
+
+def profile_edit_nav_kb(*, with_contact: bool = False) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = []
+    if with_contact:
+        rows.append([KeyboardButton(text=BTN_SHARE_CONTACT, request_contact=True)])
+    rows.append([KeyboardButton(text=BTN_BACK), KeyboardButton(text=BTN_ABORT)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def profile_photo_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_DELETE_PHOTO)],
+            [KeyboardButton(text=BTN_BACK), KeyboardButton(text=BTN_ABORT)],
+        ],
         resize_keyboard=True,
     )
 

@@ -97,7 +97,7 @@ def compose_body(
         raw_text,
         departure_text=dep,
         seats_hint=seats_hint,
-        direction=direction,
+        direction=direction or getattr(driver, "preferred_direction", None),
     )
 
 

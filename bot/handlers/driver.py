@@ -33,9 +33,12 @@ from bot.database.models import (
 )
 from bot.handlers.group import create_driver_invite_links, edit_group_card
 from bot.keyboards.default_kb import (
+    BTN_ABORT,
     BTN_ANNOUNCE,
+    BTN_BACK,
     BTN_BT,
     BTN_CANCEL,
+    BTN_DELETE_PHOTO,
     BTN_DRIVER_GROUPS,
     BTN_PASSENGER_MENU,
     BTN_PROFILE,
@@ -49,6 +52,8 @@ from bot.keyboards.default_kb import (
     contact_kb,
     driver_panel_kb,
     main_menu_kb,
+    profile_edit_nav_kb,
+    profile_photo_kb,
     skip_kb,
 )
 from bot.keyboards.inline_kb import (
@@ -57,7 +62,10 @@ from bot.keyboards.inline_kb import (
     departure_time_kb,
     driver_approval_kb,
     group_invite_kb,
-    profile_departure_kb,
+    profile_edit_kb,
+    profile_ready_kb,
+    profile_route_kb,
+    profile_seats_kb,
     raw_post_confirm_kb,
 )
 from bot.services.departure import (
@@ -80,11 +88,19 @@ from bot.services.driver_raw_post import (
 from bot.services.notify import notify_admins
 from bot.states.order_states import (
     DriverAnnounce,
-    DriverDepartureEdit,
     DriverMissing,
+    DriverProfileEdit,
     DriverRawPost,
     DriverReg,
 )
+
+PROFILE_FIELD_PROMPTS: dict[str, str] = {
+    "name": "Yangi ismingizni yozing:",
+    "phone": "Telefon raqamingizni yuboring (tugma yoki +998...):",
+    "car": "Mashina rusumini yozing (masalan: Cobalt):",
+    "color": "Mashina rangini yozing:",
+    "plate": "Davlat raqamini yozing (masalan: 40 A 123 BA):",
+}
 
 logger = logging.getLogger(__name__)
 router = Router(name="driver")
@@ -1037,6 +1053,137 @@ async def raw_post_ok(
     asyncio.create_task(_rest(), name=f"raw-post-{driver.telegram_id}")
 
 
+def _route_label(direction: str | None) -> str:
+    if not direction:
+        return "—"
+    pair = DIRECTION_LABELS.get(direction)
+    if not pair:
+        return direction
+    return f"{pair[0]} ➡️ {pair[1]}"
+
+
+def _profile_text(driver: Driver) -> str:
+    dep = (driver.last_departure_text or "").strip() or "—"
+    seats = driver.seats_count if driver.seats_count else "—"
+    req = driver.missing_required_fields()
+    lines = [
+        "👤 <b>Profilingiz</b>\n",
+        f"Ism: <b>{driver.full_name}</b>",
+        f"Telefon: <code>{driver.phone or '—'}</code>",
+        f"Mashina: <b>{driver.car_model or '—'}</b>",
+        f"Rang: {driver.car_color or '—'}",
+        f"Davlat raqami: <code>{driver.car_number or '—'}</code>",
+        f"O'rinlar: <b>{seats}</b>",
+        f"Yo'nalish: {_route_label(getattr(driver, 'preferred_direction', None))}",
+        f"🕐 Ketish vaqti: <b>{dep}</b>",
+        f"Rasm: {'bor' if driver.photo_file_id else 'yo‘q'}",
+    ]
+    if req:
+        lines.append(
+            "\n⚠️ Majburiy yetishmayapti: "
+            + ", ".join(DRIVER_FIELD_LABELS[k] for k in req)
+        )
+    lines.append("\nPastdan kerakli maydonni o'zgartiring.")
+    return "\n".join(lines)
+
+
+async def show_profile_view(
+    target: Message,
+    driver: Driver,
+    *,
+    as_reply: bool = True,
+    ask_ready: bool = False,
+) -> None:
+    """Profil matni + rasm preview + tahrir tugmalari."""
+    text = _profile_text(driver)
+    kb = profile_edit_kb()
+    panel = _panel_kb(driver)
+    if driver.photo_file_id:
+        try:
+            await target.answer_photo(
+                photo=driver.photo_file_id,
+                caption=text[:1024],
+                reply_markup=kb,
+            )
+            if ask_ready:
+                await target.answer(
+                    "Shu holatda taksi profilingiz e'lonlarga chiqaveradimi?\n"
+                    "Telefon, mashina, rasm — hammasi shu ko'rinishda bo'ladi.",
+                    reply_markup=profile_ready_kb(),
+                )
+            elif as_reply:
+                await target.answer("Panel:", reply_markup=panel)
+            return
+        except (TelegramBadRequest, TelegramForbiddenError):
+            pass
+    await target.answer(text, reply_markup=kb)
+    if ask_ready:
+        await target.answer(
+            "Shu holatda taksi profilingiz e'lonlarga chiqaveradimi?\n"
+            "Telefon, mashina, rasm — hammasi shu ko'rinishda bo'ladi.",
+            reply_markup=profile_ready_kb(),
+        )
+    elif as_reply:
+        await target.answer("Panel:", reply_markup=panel)
+
+
+async def _profile_saved(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    user_id: int,
+) -> None:
+    await state.clear()
+    driver = await get_driver(session, user_id)
+    if driver is None:
+        await message.answer("Profil topilmadi.", reply_markup=main_menu_kb())
+        return
+    await message.answer("✅ Saqlandi.", reply_markup=_panel_kb(driver))
+    await show_profile_view(message, driver, ask_ready=True)
+
+
+@router.callback_query(F.data == "profok:yes")
+async def profile_ready_yes(callback: CallbackQuery, session: AsyncSession) -> None:
+    user = callback.from_user
+    if user is None:
+        await callback.answer()
+        return
+    driver = await get_driver(session, user.id)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await callback.message.answer(
+        "✅ Tayyor. Keyingi e'lonlarda shu profil ishlatiladi:\n"
+        "ism, telefon, mashina, rasm va boshqa ma'lumotlar.",
+        reply_markup=_panel_kb(driver),
+    )
+    await callback.answer("Tasdiqlandi")
+
+
+@router.callback_query(F.data == "profok:edit")
+async def profile_ready_edit(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = callback.from_user
+    if user is None:
+        await callback.answer()
+        return
+    driver = await get_driver(session, user.id)
+    if driver is None:
+        await callback.answer("Profil topilmadi.", show_alert=True)
+        return
+    await state.clear()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await show_profile_view(callback.message, driver, ask_ready=False)
+    await callback.answer()
+
+
 @router.message(F.text == BTN_PROFILE)
 async def on_profile(message: Message, state: FSMContext, session: AsyncSession) -> None:
     user = message.from_user
@@ -1046,49 +1193,18 @@ async def on_profile(message: Message, state: FSMContext, session: AsyncSession)
     if driver is None or not driver.is_legacy_or_approved():
         await message.answer("Haydovchi profili yo'q.", reply_markup=main_menu_kb())
         return
-    opt = driver.missing_optional_fields()
-    req = driver.missing_required_fields()
-    dep = (driver.last_departure_text or "").strip() or "—"
-    lines = [
-        "👤 <b>Profilingiz</b>\n",
-        f"Ism: <b>{driver.full_name}</b>",
-        f"Telefon: <code>{driver.phone or '—'}</code>",
-        f"Mashina: {driver.car_model or '—'} · {driver.car_number or '—'}",
-        f"Rang: {driver.car_color or '—'}",
-        f"O'rinlar: {driver.seats_count if driver.seats_count else '—'}",
-        f"Rasm: {'bor' if driver.photo_file_id else 'yoq'}",
-        f"🕐 Ketish vaqti: <b>{dep}</b>",
-        f"Status: <b>{driver.status}</b>",
-    ]
-    if req:
-        lines.append(
-            "\n⚠️ Majburiy yetishmayapti: "
-            + ", ".join(DRIVER_FIELD_LABELS[k] for k in req)
+    if not driver.is_access_valid():
+        await message.answer(
+            "Profilingiz hozir faol emas. Admin bilan bog'laning.",
+            reply_markup=main_menu_kb(),
         )
-    if opt:
-        lines.append(
-            "\nIxtiyoriy to'ldirilmagan: "
-            + ", ".join(DRIVER_FIELD_LABELS[k] for k in opt)
-        )
-    await message.answer("\n".join(lines), reply_markup=_panel_kb(driver))
-    await message.answer(
-        "Ketish vaqti shablonini o'zgartirish mumkin:",
-        reply_markup=profile_departure_kb(),
-    )
-    fill_queue = req + opt
-    if fill_queue:
-        await state.set_state(DriverMissing.collecting)
-        await state.update_data(
-            missing_queue=fill_queue,
-            missing_optional=True,  # ixtiyoriylarni o'tkazish mumkin; majburiy skip tekshiruvi alohida
-            resume_action="profile",
-        )
-        await message.answer("Yetishmayotgan maydonlarni birma-bir to'ldiramiz:")
-        await _ask_next_missing(message, state)
+        return
+    await state.clear()
+    await show_profile_view(message, driver)
 
 
-@router.callback_query(F.data == "pdep:edit")
-async def profile_dep_edit_start(
+@router.callback_query(F.data == "prof:back")
+async def profile_back_cb(
     callback: CallbackQuery,
     state: FSMContext,
     session: AsyncSession,
@@ -1097,20 +1213,127 @@ async def profile_dep_edit_start(
     if user is None:
         await callback.answer()
         return
+    await state.clear()
     driver = await get_driver(session, user.id)
-    if driver is None or not driver.is_legacy_or_approved():
+    if driver is None:
         await callback.answer("Profil topilmadi.", show_alert=True)
         return
-    await state.set_state(DriverDepartureEdit.picking)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await show_profile_view(callback.message, driver)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "prof:abort")
+async def profile_abort_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    user = callback.from_user
+    await state.clear()
+    uid = user.id if user else None
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await callback.message.answer("Bekor qilindi.", reply_markup=_panel_kb(uid))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("prof:"))
+async def profile_edit_start(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = callback.from_user
+    if user is None or not callback.data:
+        await callback.answer()
+        return
+    field = callback.data.split(":", 1)[1]
+    if field in {"back", "abort"}:
+        return
+    driver = await get_driver(session, user.id)
+    if driver is None or not driver.is_legacy_or_approved() or not driver.is_access_valid():
+        await callback.answer("Ruxsat yo'q.", show_alert=True)
+        return
+
+    await state.update_data(edit_field=field)
+
+    if field == "time":
+        await state.set_state(DriverProfileEdit.picking_time)
+        await callback.message.answer(
+            "🕐 Ketish vaqti shablonini tanlang:",
+            reply_markup=departure_time_kb(driver.last_departure_text, prefix="profdep"),
+        )
+        await callback.answer()
+        return
+
+    if field == "seats":
+        await state.set_state(DriverProfileEdit.waiting)
+        await callback.message.answer(
+            "O'rinlar sonini tanlang:",
+            reply_markup=profile_seats_kb(),
+        )
+        await callback.answer()
+        return
+
+    if field == "route":
+        await state.set_state(DriverProfileEdit.waiting)
+        await callback.message.answer(
+            "Default yo'nalishni tanlang:",
+            reply_markup=profile_route_kb(),
+        )
+        await callback.answer()
+        return
+
+    if field == "photo":
+        await state.set_state(DriverProfileEdit.waiting)
+        await callback.message.answer(
+            "Yangi mashina rasmini yuboring yoki rasmni o'chiring:",
+            reply_markup=profile_photo_kb(),
+        )
+        await callback.answer()
+        return
+
+    prompt = PROFILE_FIELD_PROMPTS.get(field)
+    if not prompt:
+        await callback.answer("Noma'lum maydon.", show_alert=True)
+        return
+    await state.set_state(DriverProfileEdit.waiting)
+    with_contact = field == "phone"
     await callback.message.answer(
-        "🕐 Yangi ketish vaqti shablonini tanlang:",
-        reply_markup=departure_time_kb(driver.last_departure_text, prefix="pdep"),
+        prompt,
+        reply_markup=profile_edit_nav_kb(with_contact=with_contact),
     )
     await callback.answer()
 
 
-@router.callback_query(DriverDepartureEdit.picking, F.data.startswith("pdep:"))
-async def profile_dep_pick(
+@router.callback_query(DriverProfileEdit.waiting, F.data.startswith("profseats:"))
+async def profile_seats_cb(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = callback.from_user
+    if user is None or not callback.data:
+        await callback.answer()
+        return
+    try:
+        seats = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer("Noto'g'ri.", show_alert=True)
+        return
+    if seats not in {1, 2, 3, 4}:
+        await callback.answer("1–4 tanlang.", show_alert=True)
+        return
+    await update_driver_fields(session, user.id, seats_count=seats)
+    await session.commit()
+    await callback.answer("Saqlandi")
+    await _profile_saved(callback.message, state, session, user.id)
+
+
+@router.callback_query(DriverProfileEdit.waiting, F.data.startswith("profroute:"))
+async def profile_route_cb(
     callback: CallbackQuery,
     state: FSMContext,
     session: AsyncSession,
@@ -1120,61 +1343,67 @@ async def profile_dep_pick(
         await callback.answer()
         return
     code = callback.data.split(":", 1)[1]
-    if code == "edit":
+    if code == "clear":
+        await update_driver_fields(session, user.id, clear_direction=True)
+    elif code in DIRECTION_LABELS:
+        await update_driver_fields(session, user.id, preferred_direction=code)
+    else:
+        await callback.answer("Noto'g'ri.", show_alert=True)
+        return
+    await session.commit()
+    await callback.answer("Saqlandi")
+    await _profile_saved(callback.message, state, session, user.id)
+
+
+@router.callback_query(DriverProfileEdit.picking_time, F.data.startswith("profdep:"))
+async def profile_time_cb(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = callback.from_user
+    if user is None or not callback.data:
         await callback.answer()
         return
+    code = callback.data.split(":", 1)[1]
     if code == "cancel":
         await state.clear()
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except TelegramBadRequest:
-            pass
-        await callback.message.answer("Bekor qilindi.", reply_markup=_panel_kb(user.id))
+        driver = await get_driver(session, user.id)
+        if driver:
+            await show_profile_view(callback.message, driver)
         await callback.answer()
         return
-
     driver = await get_driver(session, user.id)
     if driver is None:
         await state.clear()
         await callback.answer("Profil topilmadi.", show_alert=True)
         return
-
     if code == "custom":
-        await state.set_state(DriverDepartureEdit.custom_time)
+        await state.set_state(DriverProfileEdit.custom_time)
         await callback.message.answer(
             f"Ketish vaqtini yozing (max {MAX_CUSTOM_LEN} belgi):",
-            reply_markup=cancel_kb(),
+            reply_markup=profile_edit_nav_kb(),
         )
         await callback.answer()
         return
-
     if code == "last":
         departure = normalize_departure(driver.last_departure_text or "")
         if not departure:
-            await callback.answer("Hali saqlangan vaqt yo'q.", show_alert=True)
+            await callback.answer("Oxirgi vaqt yo'q.", show_alert=True)
             return
     else:
         departure = resolve_template(code)
         if not departure:
-            await callback.answer("Noto'g'ri tanlov.", show_alert=True)
+            await callback.answer("Noto'g'ri.", show_alert=True)
             return
-
     await update_driver_fields(session, user.id, last_departure_text=departure)
     await session.commit()
-    await state.clear()
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except TelegramBadRequest:
-        pass
-    await callback.message.answer(
-        f"✅ Saqlandi: <b>{departure}</b>",
-        reply_markup=_panel_kb(user.id),
-    )
     await callback.answer("Saqlandi")
+    await _profile_saved(callback.message, state, session, user.id)
 
 
-@router.message(DriverDepartureEdit.custom_time, F.text)
-async def profile_dep_custom(
+@router.message(DriverProfileEdit.custom_time, F.text)
+async def profile_time_custom(
     message: Message,
     state: FSMContext,
     session: AsyncSession,
@@ -1182,24 +1411,168 @@ async def profile_dep_custom(
     user = message.from_user
     if user is None:
         return
-    if message.text == BTN_CANCEL:
+    text = (message.text or "").strip()
+    if text in {BTN_BACK, BTN_ABORT, BTN_CANCEL}:
         await state.clear()
-        await message.answer("Bekor qilindi.", reply_markup=_panel_kb(user.id))
+        driver = await get_driver(session, user.id)
+        if text == BTN_BACK and driver:
+            await show_profile_view(message, driver)
+        else:
+            await message.answer("Bekor qilindi.", reply_markup=_panel_kb(user.id))
         return
-    departure = normalize_departure(message.text or "")
+    departure = normalize_departure(text)
     if not departure:
         await message.answer(
             f"1–{MAX_CUSTOM_LEN} belgi orasida yozing.",
-            reply_markup=cancel_kb(),
+            reply_markup=profile_edit_nav_kb(),
         )
         return
     await update_driver_fields(session, user.id, last_departure_text=departure)
     await session.commit()
-    await state.clear()
-    await message.answer(
-        f"✅ Saqlandi: <b>{departure}</b>",
-        reply_markup=_panel_kb(user.id),
-    )
+    await _profile_saved(message, state, session, user.id)
+
+
+@router.message(DriverProfileEdit.waiting, F.contact)
+async def profile_edit_contact(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = message.from_user
+    if user is None:
+        return
+    data = await state.get_data()
+    if data.get("edit_field") != "phone":
+        await message.answer("Hozir telefon kutilmayapti.")
+        return
+    if message.contact and message.contact.user_id and message.contact.user_id != user.id:
+        await message.answer(
+            "Faqat o'z raqamingizni yuboring.",
+            reply_markup=profile_edit_nav_kb(with_contact=True),
+        )
+        return
+    phone = _normalize_phone(message.contact.phone_number if message.contact else "")
+    if not phone:
+        await message.answer(
+            "Raqam o'qilmadi.",
+            reply_markup=profile_edit_nav_kb(with_contact=True),
+        )
+        return
+    await update_driver_fields(session, user.id, phone=phone)
+    await session.commit()
+    await _profile_saved(message, state, session, user.id)
+
+
+@router.message(DriverProfileEdit.waiting, F.photo)
+async def profile_edit_photo(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = message.from_user
+    if user is None:
+        return
+    data = await state.get_data()
+    if data.get("edit_field") != "photo":
+        await message.answer("Hozir rasm kutilmayapti. Matn yuboring.")
+        return
+    photo = message.photo[-1]
+    await update_driver_fields(session, user.id, photo_file_id=photo.file_id)
+    await session.commit()
+    await _profile_saved(message, state, session, user.id)
+
+
+@router.message(DriverProfileEdit.waiting, F.text)
+async def profile_edit_text(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    user = message.from_user
+    if user is None:
+        return
+    text = (message.text or "").strip()
+    if text in {BTN_BACK, BTN_ABORT, BTN_CANCEL}:
+        await state.clear()
+        driver = await get_driver(session, user.id)
+        if text == BTN_BACK and driver:
+            await show_profile_view(message, driver)
+        else:
+            await message.answer("Bekor qilindi.", reply_markup=_panel_kb(user.id))
+        return
+
+    data = await state.get_data()
+    field = data.get("edit_field")
+
+    if field == "photo":
+        if text == BTN_DELETE_PHOTO:
+            await update_driver_fields(session, user.id, clear_photo=True)
+            await session.commit()
+            await _profile_saved(message, state, session, user.id)
+            return
+        await message.answer(
+            "Rasm yuboring yoki «🗑 Rasmni o'chirish»ni bosing.",
+            reply_markup=profile_photo_kb(),
+        )
+        return
+
+    if field in {"seats", "route", "time"}:
+        await message.answer("Pastdagi tugmalardan tanlang.")
+        return
+
+    kwargs: dict = {}
+    if field == "name":
+        if len(text) < 3 or len(text) > 80:
+            await message.answer("Ism 3–80 belgi bo'lsin.", reply_markup=profile_edit_nav_kb())
+            return
+        kwargs["full_name"] = text
+    elif field == "phone":
+        phone = _normalize_phone(text)
+        if not phone:
+            await message.answer(
+                "Raqamni tugma orqali yuboring yoki +998... yozing.",
+                reply_markup=profile_edit_nav_kb(with_contact=True),
+            )
+            return
+        kwargs["phone"] = phone
+    elif field == "car":
+        if len(text) < 2 or len(text) > 80:
+            await message.answer("Rusum 2–80 belgi.", reply_markup=profile_edit_nav_kb())
+            return
+        kwargs["car_model"] = text
+    elif field == "color":
+        if len(text) < 2 or len(text) > 40:
+            await message.answer("Rang 2–40 belgi.", reply_markup=profile_edit_nav_kb())
+            return
+        kwargs["car_color"] = text
+    elif field == "plate":
+        number = _normalize_plate(text)
+        if not number:
+            await message.answer(
+                "Raqam formati noto'g'ri. Qayta yozing.",
+                reply_markup=profile_edit_nav_kb(),
+            )
+            return
+        kwargs["car_number"] = number
+    else:
+        await message.answer("Noma'lum maydon. Profilni qayta oching.")
+        await state.clear()
+        return
+
+    await update_driver_fields(session, user.id, **kwargs)
+    await session.commit()
+    await _profile_saved(message, state, session, user.id)
+
+
+# Eski pdep callback — yangi prof:time ga yo'naltirish
+@router.callback_query(F.data == "pdep:edit")
+async def profile_dep_edit_legacy(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    callback.data = "prof:time"
+    await profile_edit_start(callback, state, session)
 
 
 @router.message(F.text == BTN_DRIVER_GROUPS)

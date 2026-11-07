@@ -95,10 +95,26 @@ def _driver_line(driver) -> str:
         if missing
         else "\n   ✅ Profil to'liq"
     )
+    color = f" · {driver.car_color}" if getattr(driver, "car_color", None) else ""
+    seats = (
+        f" · {driver.seats_count} joy"
+        if getattr(driver, "seats_count", None)
+        else ""
+    )
+    dep = getattr(driver, "last_departure_text", None) or "—"
+    route_key = getattr(driver, "preferred_direction", None)
+    from bot.database.models import DIRECTION_LABELS
+
+    if route_key and route_key in DIRECTION_LABELS:
+        o, d = DIRECTION_LABELS[route_key]
+        route = f"{o}➡️{d}"
+    else:
+        route = "—"
     return (
         f"{paid} <code>{driver.telegram_id}</code> {driver.full_name}\n"
-        f"   {driver.car_model or '—'} {driver.car_number or '—'} · {status}{until}{left_s}\n"
-        f"   📞 {driver.phone or '—'}\n"
+        f"   {driver.car_model or '—'} {driver.car_number or '—'}{color}{seats} · {status}{until}{left_s}\n"
+        f"   📞 {driver.phone or '—'} · 🕐 {dep}\n"
+        f"   📍 {route}\n"
         f"   📅 Qo'shilgan: {_fmt_dt(driver.created_at)}"
         f"{miss_s}"
     )

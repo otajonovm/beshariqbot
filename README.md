@@ -136,3 +136,7 @@ Tanlangan matn `last_departure_text` da saqlanadi. «🔁 Oxirgi e'lonni takrorl
 ### Guruhdagi e'lon stili
 
 Haydovchi e'loni guruhga rasm + qatorma-qator caption bilan chiqadi (`👤 Haydovchi: HOZIRGA`, yo'nalish, joy, pochta, avto, tel…). Inline tugmalar: **🚖 Zakas berish** (bot lichkasida haydovchiga xabar) va **📞 +998…** (WhatsApp/qo'ng'iroq havolasi; telefon yo'q bo'lsa **✍️ Yozish**).
+
+### Profilni tahrirlash
+
+**👤 Profilim** — ism, telefon, mashina, rang, raqam, joylar, yo'nalish, vaqt shabloni va rasm. Har maydon yonida **✏️** tugma: faqat shu maydon so'raladi, qolganlari o'zgarmaydi. Keyingi e'lonlarda yangi ma'lumot ishlatiladi; qayta registratsiya yo'q.

@@ -238,9 +238,102 @@ def profile_departure_kb() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="🕐 Ketish vaqtini o'zgartirish",
-                    callback_data="pdep:edit",
+                    callback_data="prof:time",
                 )
             ]
+        ]
+    )
+
+
+def profile_edit_kb() -> InlineKeyboardMarkup:
+    """Har maydon uchun ✏️ O'zgartirish."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✏️ Ism", callback_data="prof:name"),
+                InlineKeyboardButton(text="✏️ Telefon", callback_data="prof:phone"),
+            ],
+            [
+                InlineKeyboardButton(text="✏️ Mashina", callback_data="prof:car"),
+                InlineKeyboardButton(text="✏️ Rang", callback_data="prof:color"),
+            ],
+            [
+                InlineKeyboardButton(text="✏️ Raqam", callback_data="prof:plate"),
+                InlineKeyboardButton(text="✏️ Joylar", callback_data="prof:seats"),
+            ],
+            [
+                InlineKeyboardButton(text="✏️ Yo'nalish", callback_data="prof:route"),
+                InlineKeyboardButton(text="✏️ Vaqt", callback_data="prof:time"),
+            ],
+            [
+                InlineKeyboardButton(text="✏️ Rasm", callback_data="prof:photo"),
+            ],
+        ]
+    )
+
+
+def profile_ready_kb() -> InlineKeyboardMarkup:
+    """Profil saqlangach: e'longa chiqishini tasdiqlash."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Ha, e'lonlarga shu profil",
+                    callback_data="profok:yes",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Yana tahrirlash",
+                    callback_data="profok:edit",
+                )
+            ],
+        ]
+    )
+
+
+def profile_seats_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="1", callback_data="profseats:1"),
+                InlineKeyboardButton(text="2", callback_data="profseats:2"),
+                InlineKeyboardButton(text="3", callback_data="profseats:3"),
+                InlineKeyboardButton(text="4", callback_data="profseats:4"),
+            ],
+            [
+                InlineKeyboardButton(text="⬅️ Orqaga", callback_data="prof:back"),
+                InlineKeyboardButton(text="❌ Bekor", callback_data="prof:abort"),
+            ],
+        ]
+    )
+
+
+def profile_route_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Beshariq ➡️ Toshkent",
+                    callback_data="profroute:beshariq_tashkent",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Toshkent ➡️ Beshariq",
+                    callback_data="profroute:tashkent_beshariq",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗑 Default yo'q",
+                    callback_data="profroute:clear",
+                )
+            ],
+            [
+                InlineKeyboardButton(text="⬅️ Orqaga", callback_data="prof:back"),
+                InlineKeyboardButton(text="❌ Bekor", callback_data="prof:abort"),
+            ],
         ]
     )
 
