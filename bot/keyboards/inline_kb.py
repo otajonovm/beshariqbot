@@ -127,13 +127,19 @@ def admin_drivers_list_kb(
     total: int,
     page_size: int = 10,
     query: str = "",
+    pending_count: int = 0,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for d in drivers:
         mark = "✅"
-        if getattr(d, "status", "") == "banned":
+        st = getattr(d, "status", "")
+        if st == "pending":
+            mark = "⏳"
+        elif st == "rejected":
+            mark = "❌"
+        elif st == "banned":
             mark = "⛔"
-        elif getattr(d, "status", "") == "deleted" or getattr(d, "deleted_at", None):
+        elif st == "deleted" or getattr(d, "deleted_at", None):
             mark = "🗑"
         label = f"{mark} {d.full_name}"[:40]
         rows.append(
@@ -152,6 +158,12 @@ def admin_drivers_list_kb(
         )
     if nav:
         rows.append(nav)
+    pending_label = "⏳ Kutayotgan arizalar"
+    if pending_count > 0:
+        pending_label = f"⏳ Kutayotgan arizalar ({pending_count})"
+    rows.append(
+        [InlineKeyboardButton(text=pending_label, callback_data="adm:drv:pending")]
+    )
     rows.append(
         [InlineKeyboardButton(text="🔎 Qidiruv", callback_data="adm:drv:search")]
     )
@@ -162,6 +174,8 @@ def admin_drivers_list_kb(
 def admin_driver_card_kb(driver) -> InlineKeyboardMarkup:
     banned = getattr(driver, "status", "") == "banned"
     deleted = getattr(driver, "status", "") == "deleted" or getattr(driver, "deleted_at", None)
+    pending = getattr(driver, "status", "") == "pending"
+    rejected = getattr(driver, "status", "") == "rejected"
     rows: list[list[InlineKeyboardButton]] = []
     if deleted:
         rows.append(
@@ -173,6 +187,31 @@ def admin_driver_card_kb(driver) -> InlineKeyboardMarkup:
             ]
         )
         rows.append(admin_nav_row(back="adm:drv:list:0"))
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    # Yangi / rad etilgan ariza — barcha adminlar tasdiqlay oladi
+    if pending or rejected:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✅ Tasdiqlash",
+                    callback_data=f"adm:drv:approve:{driver.telegram_id}",
+                ),
+                InlineKeyboardButton(
+                    text="❌ Rad etish",
+                    callback_data=f"adm:drv:reject:{driver.telegram_id}",
+                ),
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✍️ Haydovchiga xabar",
+                    callback_data=f"adm:drv:msg:{driver.telegram_id}",
+                )
+            ]
+        )
+        rows.append(admin_nav_row(back="adm:drv:pending"))
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     if banned:

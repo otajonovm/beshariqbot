@@ -263,6 +263,14 @@ async def cb_approve_driver(callback: CallbackQuery, session: AsyncSession) -> N
         )
     except (TelegramForbiddenError, TelegramBadRequest):
         await callback.message.answer("Haydovchiga yozib bo'lmadi.")
+    # Barcha adminlarga xabar (kim tasdiqlaganini bilishsin)
+    from bot.services.notify import notify_admins
+
+    who = callback.from_user.full_name if callback.from_user else "Admin"
+    await notify_admins(
+        callback.bot,
+        f"✅ {who} tasdiqladi: <b>{driver.full_name}</b> (<code>{driver_id}</code>)",
+    )
     await callback.answer("Tasdiqlandi.")
 
 
@@ -296,6 +304,13 @@ async def cb_reject_driver(callback: CallbackQuery, session: AsyncSession) -> No
         )
     except (TelegramForbiddenError, TelegramBadRequest):
         pass
+    from bot.services.notify import notify_admins
+
+    who = callback.from_user.full_name if callback.from_user else "Admin"
+    await notify_admins(
+        callback.bot,
+        f"❌ {who} rad etdi: <b>{driver.full_name}</b> (<code>{driver_id}</code>)",
+    )
     await callback.answer("Rad etildi.")
 
 

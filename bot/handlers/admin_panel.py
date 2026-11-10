@@ -97,11 +97,24 @@ router.callback_query.filter(F.message.chat.type == "private", IsAdmin())
 def _status_line(driver: Driver) -> str:
     if driver.is_soft_deleted():
         return "🗑 O'chirilgan"
+    if driver.status == DriverStatus.PENDING.value:
+        return "⏳ Tasdiq kutilmoqda"
+    if driver.status == DriverStatus.REJECTED.value:
+        return "❌ Rad etilgan"
     if driver.status == DriverStatus.BANNED.value:
         return "⛔ Bloklangan"
     if driver.is_access_valid():
         return "✅ Faol"
     return f"ℹ️ {driver.status}"
+
+
+async def _pending_drivers(session: AsyncSession) -> list[Driver]:
+    rows, _ = await search_drivers(session, None, offset=0, limit=200, include_deleted=False)
+    return [d for d in rows if d.status == DriverStatus.PENDING.value]
+
+
+async def _pending_count(session: AsyncSession) -> int:
+    return len(await _pending_drivers(session))
 
 
 def _payment_line(driver: Driver) -> str:
@@ -172,15 +185,119 @@ async def adm_drv_list(callback: CallbackQuery, session: AsyncSession, state: FS
         page = 0
     page = max(0, page)
     rows, total = await search_drivers(session, None, offset=page * PAGE, limit=PAGE)
+    pending_n = await _pending_count(session)
     text = f"🚖 <b>Haydovchilar</b> ({total} ta)\nSahifa {page + 1}."
+    if pending_n:
+        text += f"\n⏳ Kutayotgan ariza: <b>{pending_n}</b>"
     if not rows:
         text = "Haydovchilar topilmadi."
     await _edit_or_answer(
         callback,
         text,
-        admin_drivers_list_kb(rows, page=page, total=total, page_size=PAGE),
+        admin_drivers_list_kb(
+            rows, page=page, total=total, page_size=PAGE, pending_count=pending_n
+        ),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "adm:drv:pending")
+async def adm_drv_pending(callback: CallbackQuery, session: AsyncSession) -> None:
+    pending = await _pending_drivers(session)
+    if not pending:
+        await _edit_or_answer(
+            callback,
+            "⏳ Kutayotgan ariza yo'q.",
+            admin_drivers_list_kb([], page=0, total=0, pending_count=0),
+        )
+        await callback.answer()
+        return
+    text = f"⏳ <b>Kutayotgan arizalar</b> ({len(pending)} ta)\nTanlang:"
+    await _edit_or_answer(
+        callback,
+        text,
+        admin_drivers_list_kb(
+            pending[:PAGE],
+            page=0,
+            total=len(pending),
+            page_size=PAGE,
+            pending_count=len(pending),
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:drv:approve:"))
+async def adm_drv_approve(callback: CallbackQuery, session: AsyncSession) -> None:
+    from bot.database.db_requests import approve_driver
+    from bot.services.notify import notify_admins
+
+    driver_id = int((callback.data or "").rsplit(":", 1)[-1])
+    driver = await approve_driver(session, driver_id)
+    if driver is None:
+        await callback.answer("Topilmadi.", show_alert=True)
+        return
+    if driver.status == DriverStatus.BANNED.value:
+        await callback.answer("Bloklangan — avval blokdan chiqaring.", show_alert=True)
+        return
+    await log_admin_action(
+        session,
+        admin_id=callback.from_user.id,
+        action="approve",
+        target_id=driver_id,
+    )
+    await session.commit()
+    try:
+        await callback.bot.send_message(
+            driver_id,
+            "🎉 Arizangiz tasdiqlandi! Haydovchi paneli ochildi.",
+            reply_markup=driver_panel_kb(),
+        )
+    except (TelegramForbiddenError, TelegramBadRequest):
+        pass
+    admin_name = callback.from_user.full_name if callback.from_user else "Admin"
+    await notify_admins(
+        callback.bot,
+        f"✅ {admin_name} tasdiqladi: <b>{driver.full_name}</b> "
+        f"(<code>{driver_id}</code>)",
+    )
+    await _edit_or_answer(callback, format_driver_card(driver), admin_driver_card_kb(driver))
+    await callback.answer("Tasdiqlandi.")
+
+
+@router.callback_query(F.data.startswith("adm:drv:reject:"))
+async def adm_drv_reject(callback: CallbackQuery, session: AsyncSession) -> None:
+    from bot.database.db_requests import reject_driver
+    from bot.services.notify import notify_admins
+
+    driver_id = int((callback.data or "").rsplit(":", 1)[-1])
+    driver = await reject_driver(session, driver_id)
+    if driver is None:
+        await callback.answer("Topilmadi.", show_alert=True)
+        return
+    await log_admin_action(
+        session,
+        admin_id=callback.from_user.id,
+        action="reject",
+        target_id=driver_id,
+    )
+    await session.commit()
+    try:
+        await callback.bot.send_message(
+            driver_id,
+            "Arizangiz rad etildi. Savol bo'lsa admin bilan bog'laning.",
+            reply_markup=main_menu_kb(),
+        )
+    except (TelegramForbiddenError, TelegramBadRequest):
+        pass
+    admin_name = callback.from_user.full_name if callback.from_user else "Admin"
+    await notify_admins(
+        callback.bot,
+        f"❌ {admin_name} rad etdi: <b>{driver.full_name}</b> "
+        f"(<code>{driver_id}</code>)",
+    )
+    await _edit_or_answer(callback, format_driver_card(driver), admin_driver_card_kb(driver))
+    await callback.answer("Rad etildi.")
 
 
 @router.callback_query(F.data == "adm:drv:search")
@@ -201,9 +318,12 @@ async def adm_drv_search_text(message: Message, state: FSMContext, session: Asyn
     q = (message.text or "").strip()
     await state.clear()
     rows, total = await search_drivers(session, q, offset=0, limit=PAGE)
+    pending_n = await _pending_count(session)
     await message.answer(
         f"🔎 Natija: <b>{total}</b> ta\nSo'rov: <code>{q}</code>",
-        reply_markup=admin_drivers_list_kb(rows, page=0, total=total, page_size=PAGE, query=q),
+        reply_markup=admin_drivers_list_kb(
+            rows, page=0, total=total, page_size=PAGE, query=q, pending_count=pending_n
+        ),
     )
 
 
