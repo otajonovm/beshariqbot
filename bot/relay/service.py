@@ -161,10 +161,57 @@ def _contact_markup(user_id: int, username: str | None) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="✍️ Yo'lovchiga yozish",
                     url=contact_url(user_id, username),
+                    style="danger",
                 )
             ]
         ]
     )
+
+
+def _origin_only_markup(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup | None:
+    """tg://user privacy xatosida faqat Asl xabar tugmasini qoldirish."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for row in markup.inline_keyboard:
+        kept = [
+            btn
+            for btn in row
+            if (btn.url or "").startswith("https://t.me/")
+        ]
+        if kept:
+            rows.append(kept)
+    if not rows:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _send_relay_card(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    markup: InlineKeyboardMarkup,
+) -> Any:
+    """Kartani yuborish; BUTTON_USER* bo'lsa Asl xabar bilan qayta urinadi."""
+    try:
+        return await outbound.send(
+            bot,
+            chat_id=chat_id,
+            text=text,
+            reply_markup=markup,
+            link_preview_options=_NO_PREVIEW,
+        )
+    except TelegramBadRequest as exc:
+        err = str(exc).upper()
+        if "BUTTON_USER" not in err and "USER_PRIVACY" not in err:
+            raise
+        fallback = _origin_only_markup(markup)
+        logger.warning("relay contact button privacy chat=%s — fallback", chat_id)
+        return await outbound.send(
+            bot,
+            chat_id=chat_id,
+            text=text,
+            reply_markup=fallback,
+            link_preview_options=_NO_PREVIEW,
+        )
 
 
 async def _delete_fast(bot: Bot, chat_id: int, message_id: int) -> None:
@@ -225,13 +272,7 @@ async def _publish_sweep(bot: Bot, message: Message, body: str) -> None:
             return
         except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
             logger.warning("sweep copy bo'lmadi, karta yuboriladi chat=%s", chat.id)
-    await outbound.send(
-        bot,
-        chat_id=main_id,
-        text=text,
-        reply_markup=markup,
-        link_preview_options=_NO_PREVIEW,
-    )
+    await _send_relay_card(bot, main_id, text, markup)
 
 
 async def sweep_message(message: Message, bot: Bot) -> bool:
@@ -405,13 +446,7 @@ async def relay_message(message: Message, bot: Bot) -> None:
     )
     main_id = settings.resolved_main_group_id
     try:
-        await outbound.send(
-            bot,
-            chat_id=main_id,
-            text=text,
-            reply_markup=markup,
-            link_preview_options=_NO_PREVIEW,
-        )
+        await _send_relay_card(bot, main_id, text, markup)
     except Exception as exc:
         dedup.release(chat.id, message.message_id, user.id, decision.normalized)
         logger.exception("relay yuborilmadi chat=%s msg=%s", chat.id, message.message_id)

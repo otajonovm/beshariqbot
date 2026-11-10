@@ -22,9 +22,12 @@ def test_private_supergroup_links() -> None:
     assert "<code>+998901112233</code>" in text
     assert "A&amp;B" in text
     assert "taksi &lt;kerak&gt;" in text
-    urls = [button.url for row in markup.inline_keyboard for button in row]
+    buttons = [button for row in markup.inline_keyboard for button in row]
+    urls = [button.url for button in buttons]
     assert "https://t.me/Ali_User" in urls
     assert "https://t.me/c/123/9" in urls
+    contact = next(b for b in buttons if b.url == "https://t.me/Ali_User")
+    assert contact.style == "danger"
 
 
 def test_public_group_and_hidden_username() -> None:

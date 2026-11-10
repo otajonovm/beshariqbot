@@ -64,15 +64,20 @@ def render(card: RelayCard) -> tuple[str, InlineKeyboardMarkup]:
         body = body[:3500] + "…"
     lines.append(f"💬 {body}")
 
-    buttons = [
-        InlineKeyboardButton(
-            text="✍️ Yo'lovchiga yozish",
-            url=contact_url(card.user_id, username),
-        )
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text="✍️ Yo'lovchiga yozish",
+                url=contact_url(card.user_id, username),
+                style="danger",
+            )
+        ]
     ]
     if not card.hide_origin:
         origin = message_url(card.chat_id, card.message_id, card.chat_username)
         if origin:
-            buttons.append(InlineKeyboardButton(text="🔗 Asl xabar", url=origin))
-    markup = InlineKeyboardMarkup(inline_keyboard=[buttons])
+            rows.append(
+                [InlineKeyboardButton(text="🔗 Asl xabar", url=origin, style="primary")]
+            )
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
     return "\n".join(lines), markup

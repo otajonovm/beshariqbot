@@ -265,7 +265,15 @@ def driver_announce_kb(driver: Driver) -> InlineKeyboardMarkup | None:
     if show_order:
         bot_user = settings.bot_username.lstrip("@")
         book_url = f"https://t.me/{bot_user}?start=book_{driver.telegram_id}"
-        rows.append([InlineKeyboardButton(text="🚖 Zakas berish", url=book_url)])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🚖 Zakas berish",
+                    url=book_url,
+                    style="danger",
+                )
+            ]
+        )
     if show_call:
         phone = normalize_uz_phone(driver.phone)
         if phone:
