@@ -69,14 +69,16 @@ def ad_keyboard(
     label = (button_text if button_text is not None else cfg["button_text"]) or (
         app_settings.DEFAULT_AD_BUTTON
     )
-    label = (label if label.startswith("🔴") else f"🔴 {label}")[:64]
+    if label.startswith("🔴"):
+        label = "🟢" + label[1:]
+    label = (label if label.startswith("🟢") else f"🟢 {label}")[:64]
     url = f"https://t.me/{user}?start=order"
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
                 text=label,
                 url=url,
-                **({} if simple else {"style": "danger"}),
+                **({} if simple else {"style": "success"}),
             )
         ]
     ]

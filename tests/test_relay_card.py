@@ -27,7 +27,7 @@ def test_private_supergroup_links() -> None:
     assert "https://t.me/Ali_User" in urls
     assert "https://t.me/c/123/9" in urls
     contact = next(b for b in buttons if b.url == "https://t.me/Ali_User")
-    assert contact.style == "danger"
+    assert contact.style == "success"
 
 
 def test_public_group_and_hidden_username() -> None:

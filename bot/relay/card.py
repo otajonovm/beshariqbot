@@ -67,9 +67,9 @@ def render(card: RelayCard) -> tuple[str, InlineKeyboardMarkup]:
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                text="🔴 Yo'lovchiga yozish",
+                text="🟢 Yo'lovchiga yozish",
                 url=contact_url(card.user_id, username),
-                style="danger",
+                style="success",
             )
         ]
     ]
