@@ -61,22 +61,27 @@ def ad_keyboard(
     bot_username: str | None = None,
     button_text: str | None = None,
     dispatcher_phone: str | None = None,
+    simple: bool = False,
 ) -> InlineKeyboardMarkup:
+    """Reklama tugmalari. tel: URL ishlamaydi — Dispetcher uchun wa.me."""
     cfg = app_settings.ad_config()
     user = (bot_username or settings.bot_username).lstrip("@")
     label = (button_text if button_text is not None else cfg["button_text"]) or (
         app_settings.DEFAULT_AD_BUTTON
     )
+    label = (label if label.startswith("🔴") else f"🔴 {label}")[:64]
     url = f"https://t.me/{user}?start=order"
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                text=(label if label.startswith("🔴") else f"🔴 {label}")[:64],
+                text=label,
                 url=url,
-                style="danger",
+                **({} if simple else {"style": "danger"}),
             )
         ]
     ]
+    if simple:
+        return InlineKeyboardMarkup(inline_keyboard=rows)
     phone = (
         dispatcher_phone
         if dispatcher_phone is not None
@@ -85,9 +90,14 @@ def ad_keyboard(
     if phone:
         digits = "".join(ch for ch in phone if ch.isdigit() or ch == "+")
         if digits:
-            tel = digits if digits.startswith("+") else f"+{digits}"
+            wa = digits.lstrip("+")
             rows.append(
-                [InlineKeyboardButton(text="📞 Dispetcher", url=f"tel:{tel}")]
+                [
+                    InlineKeyboardButton(
+                        text="📞 Dispetcher",
+                        url=f"https://wa.me/{wa}",
+                    )
+                ]
             )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -203,12 +213,49 @@ async def _send_ad_message(
     kb: InlineKeyboardMarkup,
 ) -> Message:
     cap = caption[:CAPTION_LIMIT]
-    if banner is None:
-        return await bot.send_message(chat_id, cap, reply_markup=kb)
-    if isinstance(banner, Path):
-        photo = FSInputFile(str(banner))
-        return await bot.send_photo(chat_id, photo=photo, caption=cap, reply_markup=kb)
-    return await bot.send_photo(chat_id, photo=str(banner), caption=cap, reply_markup=kb)
+
+    async def _once(markup: InlineKeyboardMarkup) -> Message:
+        if banner is None:
+            return await bot.send_message(chat_id, cap, reply_markup=markup)
+        if isinstance(banner, Path):
+            photo = FSInputFile(str(banner))
+            return await bot.send_photo(
+                chat_id, photo=photo, caption=cap, reply_markup=markup
+            )
+        return await bot.send_photo(
+            chat_id, photo=str(banner), caption=cap, reply_markup=markup
+        )
+
+    try:
+        msg = await _once(kb)
+    except TelegramBadRequest as exc:
+        err = str(exc).lower()
+        if "button" not in err and "url" not in err and "keyboard" not in err:
+            raise
+        # Yaroqsiz tugma (masalan eski tel:) — faqat buyurtma tugmasi bilan qayta
+        logger.warning("Ad keyboard fail chat=%s: %s — simple retry", chat_id, exc)
+        simple = ad_keyboard(simple=True)
+        msg = await _once(simple)
+
+    # Ba'zi guruhlarda send_photo reply_markup ni tashlab yuboradi — majburan qo'yamiz
+    if msg.reply_markup is None:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=msg.message_id,
+                reply_markup=kb if kb.inline_keyboard else ad_keyboard(simple=True),
+            )
+            logger.warning("Ad markup qayta qo'yildi chat=%s mid=%s", chat_id, msg.message_id)
+        except Exception:
+            logger.exception("Ad markup edit fail chat=%s", chat_id)
+    else:
+        logger.info(
+            "Ad sent chat=%s mid=%s buttons=%s",
+            chat_id,
+            msg.message_id,
+            len(msg.reply_markup.inline_keyboard),
+        )
+    return msg
 
 
 async def send_one_group(

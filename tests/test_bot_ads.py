@@ -87,6 +87,9 @@ def test_ad_keyboard_dispatcher_optional():
     )
     texts = [b.text for row in kb.inline_keyboard for b in row]
     assert "📞 Dispetcher" in texts
+    urls = [b.url for row in kb.inline_keyboard for b in row]
+    assert any(u and u.startswith("https://wa.me/") for u in urls)
+    assert not any(u and u.startswith("tel:") for u in urls)
 
 
 def test_active_window():
