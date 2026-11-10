@@ -69,7 +69,13 @@ def ad_keyboard(
     )
     url = f"https://t.me/{user}?start=order"
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text=label[:64], url=url, style="danger")]
+        [
+            InlineKeyboardButton(
+                text=(label if label.startswith("🔴") else f"🔴 {label}")[:64],
+                url=url,
+                style="danger",
+            )
+        ]
     ]
     phone = (
         dispatcher_phone

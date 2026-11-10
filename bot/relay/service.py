@@ -159,7 +159,7 @@ def _contact_markup(user_id: int, username: str | None) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✍️ Yo'lovchiga yozish",
+                    text="🔴 Yo'lovchiga yozish",
                     url=contact_url(user_id, username),
                     style="danger",
                 )

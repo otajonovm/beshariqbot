@@ -268,7 +268,7 @@ def driver_announce_kb(driver: Driver) -> InlineKeyboardMarkup | None:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🚖 Zakas berish",
+                    text="🔴 Zakas berish",
                     url=book_url,
                     style="danger",
                 )

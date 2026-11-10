@@ -58,7 +58,7 @@ def claim_kb(order_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🤝 Buyurtmani olish",
+                    text="🔴 Buyurtmani olish",
                     url=url,
                     style="danger",
                 )
