@@ -62,12 +62,18 @@ async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
         from bot.services.bot_groups import upsert_group
 
         async with async_session_maker() as session:
-            await upsert_group(
+            g = await upsert_group(
                 session,
                 event.chat.id,
                 title=title,
-                approved=known,
+                approved=True,
             )
+            # Bot admin/a'zo bo'lsa — reklama default yoqiladi
+            if event.new_chat_member.status in {"administrator", "creator", "member"}:
+                g.flag_bot_ads = True
+                from bot.services.bot_groups import refresh_group_meta
+
+                await refresh_group_meta(event.bot, session, event.chat.id)
             await session.commit()
     except Exception:
         logger.exception("Yangi guruh DB ga yozilmadi")

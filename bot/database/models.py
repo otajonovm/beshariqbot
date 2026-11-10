@@ -516,8 +516,8 @@ class BotGroup(Base):
     flag_driver_posts: Mapped[bool] = mapped_column(Boolean, default=True)
     # Avto-e'lon
     flag_auto_posts: Mapped[bool] = mapped_column(Boolean, default=True)
-    # Bot reklamasi
-    flag_bot_ads: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Bot reklamasi (default ON — admin guruhlariga)
+    flag_bot_ads: Mapped[bool] = mapped_column(Boolean, default=True)
     # Asl xabarni o'chirish (sweep)
     flag_delete_original: Mapped[bool] = mapped_column(Boolean, default=False)
     is_main: Mapped[bool] = mapped_column(Boolean, default=False)

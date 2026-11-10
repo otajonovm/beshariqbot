@@ -139,18 +139,30 @@ def resolve_banner_source(photo_file_id: str | None) -> str | Path | None:
 
 
 async def list_ad_groups(session: AsyncSession) -> list[BotGroup]:
-    """Reklama flagi yoqilgan + (ixtiyoriy) asosiy guruh."""
+    """Bot admin / yozishi mumkin bo'lgan barcha guruhlar (flag_bot_ads o'chiq = istisno).
+
+    426 Global: flag yoqiq bo'lsa chiqadi; yoki alohida «426 Global reklama» yoqiq.
+    """
+    from bot.services.bot_groups import ensure_known_groups
+
+    await ensure_known_groups(session)
     cfg = app_settings.ad_config()
     main_id = app_settings.resolved_main_group_id()
     stmt = select(BotGroup).where(BotGroup.approved.is_(True))
     rows = list((await session.execute(stmt)).scalars().all())
     out: list[BotGroup] = []
     for g in rows:
+        # Huquq yo'qligi aniq bilinsa — o'tkazib yubor
+        if g.can_post is False:
+            continue
+        is_main = g.is_main or g.chat_id == main_id
+        if is_main:
+            if g.flag_bot_ads or cfg["main_group_enabled"]:
+                out.append(g)
+            continue
+        # Oddiy guruh: reklama flagi yoqiq (default ON)
         if g.flag_bot_ads:
             out.append(g)
-        elif g.is_main or g.chat_id == main_id:
-            if cfg["main_group_enabled"]:
-                out.append(g)
     return out
 
 

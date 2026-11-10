@@ -172,7 +172,7 @@ Deploy oldidan DB zaxira nusxasi oling (yuqoridagi bo'lim).
 - **Davomiylik:** Doimiy (faol soatlarda) yoki 1/2/3 soat — tugasa o‘zi to‘xtaydi, adminga xabar.
 - **Dizayn:** banner (`assets/ad_banner.jpg` yoki admin yuklagan) + HTML caption + «🚕 Taksi buyurtma berish» (`?start=order`). Ixtiyoriy «📞 Dispetcher».
 - Har guruhda `next_run_at`, guruhlar orasida 1–2 s jitter. Eski reklama xabari o‘chiriladi. Avto-e'lon bilan umumiy **20/min/guruh** limit.
-- Faqat «Bot reklamasi» flagi yoqilgan guruhlar; **426 Global** alohida yoqiladi.
+- Bot **admin** bo‘lgan barcha guruhlarga yuboriladi (default yoqiq). Bitta guruhni «Bot reklamasi» ❌ bilan o‘chirish mumkin; **426 Global** alohida ham yoqiladi.
 - Statistika: reklamadan bosishlar + `source=ad` buyurtmalar.
 
 ### Super-admin funksiyalar (`/admin` → ⭐ Premium)

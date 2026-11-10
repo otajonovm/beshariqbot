@@ -64,6 +64,11 @@ def note_group(chat_id: int, title: str, status: str | None = None) -> None:
             _seen.pop(oldest, None)
 
 
+def seen_group_ids() -> list[int]:
+    """Bot xabar ko'rgan / qo'shilgan guruh ID lari."""
+    return list(_seen.keys())
+
+
 def groups_overview() -> str:
     main_id = settings.resolved_main_group_id
     sources = settings.resolved_source_group_ids

@@ -47,6 +47,7 @@ SETTING_DEFAULTS: dict[str, Any] = {
     "ad_active_from": "07:00",
     "ad_active_to": "23:00",
     "ad_last_sent_at": "",
+    "ad_all_admin_groups_v1": False,  # bir martalik: barcha guruhlarda reklama ON
     "main_group_id": None,
 }
 

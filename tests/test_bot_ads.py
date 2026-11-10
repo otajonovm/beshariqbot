@@ -119,17 +119,41 @@ def test_ads_menu_has_required_buttons():
 
 @pytest.mark.asyncio
 async def test_list_ad_groups_respects_flag(session):
+    # Bir martalik migratsiyani o'tkazib yuborish (flaglarni saqlash)
+    apps._cache["ad_all_admin_groups_v1"] = True
     session.add(
-        BotGroup(chat_id=-1001, title="A", flag_bot_ads=True, approved=True)
+        BotGroup(chat_id=-1001, title="A", flag_bot_ads=True, approved=True, can_post=True)
     )
     session.add(
-        BotGroup(chat_id=-1002, title="B", flag_bot_ads=False, approved=True)
+        BotGroup(chat_id=-1002, title="B", flag_bot_ads=False, approved=True, can_post=True)
+    )
+    session.add(
+        BotGroup(chat_id=-1003, title="C", flag_bot_ads=True, approved=True, can_post=False)
     )
     await session.commit()
     groups = await bot_ads.list_ad_groups(session)
     ids = {g.chat_id for g in groups}
     assert -1001 in ids
-    assert -1002 not in ids
+    assert -1002 not in ids  # admin o'chirgan
+    assert -1003 not in ids  # yozish huquqi yo'q
+
+
+@pytest.mark.asyncio
+async def test_list_ad_groups_includes_all_when_flag_on(session):
+    apps._cache["ad_all_admin_groups_v1"] = True
+    for i, cid in enumerate((-2001, -2002, -2003)):
+        session.add(
+            BotGroup(
+                chat_id=cid,
+                title=f"G{i}",
+                flag_bot_ads=True,
+                approved=True,
+                can_post=True,
+            )
+        )
+    await session.commit()
+    groups = await bot_ads.list_ad_groups(session)
+    assert {g.chat_id for g in groups} >= {-2001, -2002, -2003}
 
 
 @pytest.mark.asyncio

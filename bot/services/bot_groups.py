@@ -27,7 +27,7 @@ async def upsert_group(
     row = await session.get(BotGroup, chat_id)
     main_id = app_settings.resolved_main_group_id()
     if row is None:
-        # Yangi: default driver posts on, ads off; main → relay source off for main itself
+        # Yangi: reklama default ON (bot admin guruhlariga); main → e'lon o'chiq
         is_main = chat_id == main_id
         row = BotGroup(
             chat_id=chat_id,
@@ -35,7 +35,7 @@ async def upsert_group(
             flag_relay_source=not is_main,
             flag_driver_posts=not is_main,
             flag_auto_posts=not is_main,
-            flag_bot_ads=False,
+            flag_bot_ads=True,
             flag_delete_original=chat_id in settings.resolved_sweep_group_ids,
             is_main=is_main,
             approved=True if approved is None else bool(approved),
@@ -52,9 +52,19 @@ async def upsert_group(
 
 
 async def ensure_known_groups(session: AsyncSession) -> None:
-    """Config dagi guruhlarni DB ga seed."""
+    """Config + ko'rilgan guruhlarni DB ga seed; reklamani default yoqadi."""
     main_id = app_settings.resolved_main_group_id()
-    for chat_id in settings.group_ids:
+    chat_ids = list(settings.group_ids)
+    # Relay ko'rgan guruhlar ham
+    try:
+        from bot.relay.service import seen_group_ids
+
+        for cid in seen_group_ids():
+            if cid not in chat_ids:
+                chat_ids.append(cid)
+    except Exception:
+        pass
+    for chat_id in chat_ids:
         await upsert_group(session, chat_id, approved=True)
     # Asosiy belgi
     await session.execute(update(BotGroup).values(is_main=False))
@@ -63,6 +73,14 @@ async def ensure_known_groups(session: AsyncSession) -> None:
         row.is_main = True
         row.flag_driver_posts = False
         row.flag_auto_posts = False
+    # Bir martalik: barcha tasdiqlangan guruhlarda reklama yoqilsin
+    if not app_settings.get_cached("ad_all_admin_groups_v1"):
+        await session.execute(
+            update(BotGroup)
+            .where(BotGroup.approved.is_(True))
+            .values(flag_bot_ads=True)
+        )
+        await app_settings.set_setting(session, "ad_all_admin_groups_v1", True)
     await session.flush()
 
 
