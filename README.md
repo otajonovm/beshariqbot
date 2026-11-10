@@ -171,7 +171,7 @@ Deploy oldidan DB zaxira nusxasi oling (yuqoridagi bo'lim).
 - **Interval:** 30 s, 1/2/5/10/30 min, 1/2/3 soat (`ad_interval_sec`). Eski soatli qiymat avtomatik soniyaga o‘tadi.
 - **Davomiylik:** Doimiy (faol soatlarda) yoki 1/2/3 soat — tugasa o‘zi to‘xtaydi, adminga xabar.
 - **Dizayn:** banner (`assets/ad_banner.jpg` yoki admin yuklagan) + HTML caption + «🚕 Taksi buyurtma berish» (`?start=order`). Ixtiyoriy «📞 Dispetcher».
-- Har guruhda `next_run_at`, guruhlar orasida 1–2 s jitter. Eski reklama xabari o‘chiriladi. Avto-e'lon bilan umumiy **20/min/guruh** limit.
+- Har guruhda `next_run_at`, guruhlar orasida 1–2 s jitter. Eski reklama **o‘chirilmaydi** — yangisi qo‘shiladi. Avto-e'lon bilan umumiy **20/min/guruh** limit.
 - Bot **admin** bo‘lgan barcha **guruh va kanallarga** yuboriladi (default yoqiq). Kanalga botni admin qiling va **Post Messages** huquqini bering. Bitta joyini «Bot reklamasi» ❌ bilan o‘chirish mumkin; **426 Global** alohida ham yoqiladi.
 - Statistika: reklamadan bosishlar + `source=ad` buyurtmalar.
 
