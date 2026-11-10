@@ -218,7 +218,16 @@ async def run_auto_post_cycle(
         for k, v in (sess.message_ids or {}).items()
         if str(k).lstrip("-").isdigit()
     }
-    targets = post_targets()
+    from bot.services.feature_flags import driver_feature_enabled
+
+    if not driver_feature_enabled("driver_auto_post", driver_ref):
+        async with session_maker() as session:
+            await stop_auto_post(session, sess.driver_id, reason="manual")
+            await session.commit()
+        set_auto_active(sess.driver_id, False)
+        return
+
+    targets = post_targets(driver_ref)
     new_ids: dict[int, int] = dict(old_ids)
     hit_rate = False
     already_notified = bool(sess.rate_notified)

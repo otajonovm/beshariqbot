@@ -4,6 +4,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class TaxiOrder(StatesGroup):
+    departure = State()
     seats = State()
     contact = State()
 
@@ -77,3 +78,21 @@ class DriverAutoPost(StatesGroup):
 class AdminExtend(StatesGroup):
     driver_id = State()
     days = State()
+
+
+class AdminDriverSearch(StatesGroup):
+    waiting = State()
+
+
+class AdminDriverMessage(StatesGroup):
+    waiting = State()
+
+
+class AdminPaymentDate(StatesGroup):
+    waiting = State()
+
+
+class AdminAdEdit(StatesGroup):
+    text = State()
+    photo = State()
+    window = State()

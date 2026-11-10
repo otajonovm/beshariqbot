@@ -27,8 +27,10 @@ router = Router(name="group")
 
 
 def _order_group_ids() -> list[int]:
-    """Zakas faqat asosiy guruhga tushadi."""
-    return [settings.primary_group_id]
+    """Zakas faqat asosiy guruhga tushadi (panel/asosiy guruh sozlamasi)."""
+    from bot.services import app_settings
+
+    return [app_settings.resolved_main_group_id()]
 
 
 async def create_driver_invite_links(_bot: Bot) -> list[str]:
@@ -52,11 +54,32 @@ async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
     known = event.chat.id in settings.group_ids
     status = "ulangan" if known else "noma'lum guruh (sozlamada yo'q)"
     logger.info("Bot guruhga qo'shildi: %s %s (%s)", event.chat.id, event.chat.title, status)
+    title = event.chat.title or "guruh"
+    # DB ga yozish + admin "Yoqasizmi?"
+    try:
+        from bot.database.models import async_session_maker
+        from bot.keyboards.inline_kb import admin_group_approve_kb
+        from bot.services.bot_groups import upsert_group
+
+        async with async_session_maker() as session:
+            await upsert_group(
+                session,
+                event.chat.id,
+                title=title,
+                approved=known,
+            )
+            await session.commit()
+    except Exception:
+        logger.exception("Yangi guruh DB ga yozilmadi")
+
+    from bot.keyboards.inline_kb import admin_group_approve_kb
+
     await notify_admins(
         event.bot,
-        f"Bot guruhga qo'shildi: <b>{event.chat.title or 'guruh'}</b>\n"
+        f"Yangi guruh: <b>{title}</b>. Yoqasizmi?\n"
         f"ID: <code>{event.chat.id}</code>\n"
-        f"{'✅ Sozlamada bor' if known else '⚠️ SUPERGROUP_IDS ga qo\'shilmagan'}",
+        f"{'✅ Sozlamada bor' if known else '⚠️ Hali ro‘yxatda yo‘q'}",
+        reply_markup=admin_group_approve_kb(event.chat.id),
     )
 
 

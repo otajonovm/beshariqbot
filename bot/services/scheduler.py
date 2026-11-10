@@ -203,10 +203,39 @@ async def check_order_claim_timeouts(bot: Bot, session_maker: async_sessionmaker
                 pass
 
 
+async def check_premium_expiry(bot: Bot, session_maker: async_sessionmaker) -> None:
+    """Premium muddati tugagan haydovchilarni o'chiradi (bir marta xabar)."""
+    from sqlalchemy import select
+
+    from bot.database.models import Driver
+    from bot.services.feature_flags import expire_premium_if_needed
+
+    async with session_maker() as session:
+        drivers = list((await session.execute(select(Driver))).scalars().all())
+        for driver in drivers:
+            changed = await expire_premium_if_needed(session, driver)
+            if not changed:
+                continue
+            try:
+                await bot.send_message(
+                    driver.telegram_id,
+                    "⭐ Premium muddati tugadi. Qo'shimcha funksiyalar o'chirildi.",
+                )
+            except (TelegramForbiddenError, TelegramBadRequest):
+                pass
+            await notify_admins(
+                bot,
+                f"⭐ Premium tugadi: {driver.full_name} <code>{driver.telegram_id}</code>",
+            )
+        await session.commit()
+
+
 def setup_scheduler(bot: Bot, session_maker: async_sessionmaker) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
     # 0. Avto-e'lon tick (30s interval uchun 10s tekshiruv)
     from bot.services.auto_post import check_auto_posts
+    from bot.services.bot_ads import check_bot_ads
+    from bot.services.payments import check_driver_payments
 
     scheduler.add_job(
         check_auto_posts,
@@ -225,6 +254,40 @@ def setup_scheduler(bot: Bot, session_maker: async_sessionmaker) -> AsyncIOSched
         hours=1,
         args=[bot, session_maker],
         id="subscription_check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    # 1b. To'lov eslatma + avto-blok (har kuni 10:00 Toshkent)
+    scheduler.add_job(
+        check_driver_payments,
+        trigger="cron",
+        hour=10,
+        minute=0,
+        args=[bot, session_maker],
+        id="payment_daily_check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    # 1c. Premium muddati (har soat)
+    scheduler.add_job(
+        check_premium_expiry,
+        trigger="interval",
+        hours=1,
+        args=[bot, session_maker],
+        id="premium_expiry_check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    # 1d. Bot reklama (har daqiqada tekshiruv; interval soat bilan)
+    scheduler.add_job(
+        check_bot_ads,
+        trigger="interval",
+        minutes=1,
+        args=[bot, session_maker],
+        id="bot_ads_check",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

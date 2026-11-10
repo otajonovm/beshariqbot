@@ -100,14 +100,391 @@ def cancel_reason_kb(order_id: int) -> InlineKeyboardMarkup:
 
 
 def admin_menu_kb() -> InlineKeyboardMarkup:
+    """Yangi sodda bosh menyu — ko'pi bilan 6 ta katta tugma."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📊 Statistika", callback_data="admin:stats")],
-            [InlineKeyboardButton(text="🎛 Funksiyalar", callback_data="admin:flags")],
-            [InlineKeyboardButton(text="🏆 Reyting (Gemifikatsiya)", callback_data="admin:lb_menu")],
-            [InlineKeyboardButton(text="👥 Guruhlar holati", callback_data="admin:groups")],
-            [InlineKeyboardButton(text="🚘 Haydovchilar", callback_data="admin:drivers")],
-            [InlineKeyboardButton(text="➕ Obunani uzaytirish", callback_data="admin:extend")],
+            [InlineKeyboardButton(text="🚖 Haydovchilar", callback_data="adm:drv:list:0")],
+            [InlineKeyboardButton(text="👥 Guruhlar", callback_data="adm:grp:list")],
+            [InlineKeyboardButton(text="💳 To'lovlar", callback_data="adm:pay:menu")],
+            [InlineKeyboardButton(text="⭐ Premium", callback_data="adm:prem:menu")],
+            [InlineKeyboardButton(text="📣 Reklama", callback_data="adm:ad:menu")],
+            [InlineKeyboardButton(text="📊 Statistika", callback_data="adm:stats")],
+        ]
+    )
+
+
+def admin_nav_row(*, back: str = "adm:home", home: bool = True) -> list[InlineKeyboardButton]:
+    row = [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=back)]
+    if home:
+        row.append(InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="adm:home"))
+    return row
+
+
+def admin_drivers_list_kb(
+    drivers: list,
+    *,
+    page: int,
+    total: int,
+    page_size: int = 10,
+    query: str = "",
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for d in drivers:
+        mark = "✅"
+        if getattr(d, "status", "") == "banned":
+            mark = "⛔"
+        elif getattr(d, "status", "") == "deleted" or getattr(d, "deleted_at", None):
+            mark = "🗑"
+        label = f"{mark} {d.full_name}"[:40]
+        rows.append(
+            [InlineKeyboardButton(text=label, callback_data=f"adm:drv:card:{d.telegram_id}")]
+        )
+    pages = max(1, (total + page_size - 1) // page_size)
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(text="◀️", callback_data=f"adm:drv:list:{page - 1}")
+        )
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="adm:noop"))
+    if page + 1 < pages:
+        nav.append(
+            InlineKeyboardButton(text="▶️", callback_data=f"adm:drv:list:{page + 1}")
+        )
+    if nav:
+        rows.append(nav)
+    rows.append(
+        [InlineKeyboardButton(text="🔎 Qidiruv", callback_data="adm:drv:search")]
+    )
+    rows.append(admin_nav_row(back="adm:home"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_driver_card_kb(driver) -> InlineKeyboardMarkup:
+    banned = getattr(driver, "status", "") == "banned"
+    deleted = getattr(driver, "status", "") == "deleted" or getattr(driver, "deleted_at", None)
+    rows: list[list[InlineKeyboardButton]] = []
+    if deleted:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="♻️ Tiklash",
+                    callback_data=f"adm:drv:restore:{driver.telegram_id}",
+                )
+            ]
+        )
+        rows.append(admin_nav_row(back="adm:drv:list:0"))
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    if banned:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✅ Blokdan chiqarish",
+                    callback_data=f"adm:drv:unban:{driver.telegram_id}",
+                )
+            ]
+        )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⛔ Bloklash",
+                    callback_data=f"adm:drv:ban:{driver.telegram_id}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🗑 O'chirish",
+                callback_data=f"adm:drv:delask:{driver.telegram_id}",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⭐ Premium funksiyalar",
+                callback_data=f"adm:drv:prem:{driver.telegram_id}",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="💳 To'lov qabul qilindi",
+                callback_data=f"adm:drv:paid:{driver.telegram_id}",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="📅 To'lov sanasini o'zgartirish",
+                callback_data=f"adm:drv:duedate:{driver.telegram_id}",
+            )
+        ]
+    )
+    exempt = bool(getattr(driver, "payment_exempt", False))
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🎁 Bepul" if not exempt else "💳 To'lovga qaytarish",
+                callback_data=f"adm:drv:exempt:{driver.telegram_id}",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="✍️ Haydovchiga xabar",
+                callback_data=f"adm:drv:msg:{driver.telegram_id}",
+            )
+        ]
+    )
+    rows.append(admin_nav_row(back="adm:drv:list:0"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_confirm_delete_kb(driver_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Ha, o'chirish",
+                    callback_data=f"adm:drv:del:{driver_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Yo'q",
+                    callback_data=f"adm:drv:card:{driver_id}",
+                )
+            ],
+        ]
+    )
+
+
+def admin_driver_premium_kb(driver) -> InlineKeyboardMarkup:
+    from bot.services.feature_flags import PREMIUM_KEYS, FLAG_BY_KEY, driver_feature_enabled
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for key in PREMIUM_KEYS:
+        meta = FLAG_BY_KEY[key]
+        on = driver_feature_enabled(key, driver)
+        mark = "✅" if on else "❌"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark} {meta.title}",
+                    callback_data=f"adm:drv:ptog:{driver.telegram_id}:{key}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(text="⭐ Paket 7 kun", callback_data=f"adm:drv:ppack:{driver.telegram_id}:7"),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(text="⭐ Paket 30 kun", callback_data=f"adm:drv:ppack:{driver.telegram_id}:30"),
+            InlineKeyboardButton(text="⭐ Paket 90 kun", callback_data=f"adm:drv:ppack:{driver.telegram_id}:90"),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="❌ Paketni o'chirish",
+                callback_data=f"adm:drv:ppack:{driver.telegram_id}:0",
+            )
+        ]
+    )
+    rows.append(admin_nav_row(back=f"adm:drv:card:{driver.telegram_id}"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_pay_days_kb(driver_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="+7 kun", callback_data=f"adm:drv:payok:{driver_id}:7"),
+                InlineKeyboardButton(text="+30 kun", callback_data=f"adm:drv:payok:{driver_id}:30"),
+                InlineKeyboardButton(text="+90 kun", callback_data=f"adm:drv:payok:{driver_id}:90"),
+            ],
+            admin_nav_row(back=f"adm:drv:card:{driver_id}"),
+        ]
+    )
+
+
+def admin_payments_menu_kb(*, enabled: bool) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=("✅ To'lovlar yoqilgan" if enabled else "❌ To'lovlar o'chiq"),
+                    callback_data="adm:pay:toggle",
+                )
+            ],
+            [InlineKeyboardButton(text="📋 Kutilayotganlar", callback_data="adm:pay:due")],
+            [InlineKeyboardButton(text="⚠️ Kechikkanlar", callback_data="adm:pay:late")],
+            [InlineKeyboardButton(text="📜 Oxirgi to'lovlar", callback_data="adm:pay:hist")],
+            admin_nav_row(back="adm:home"),
+        ]
+    )
+
+
+def admin_premium_global_kb() -> InlineKeyboardMarkup:
+    from bot.services.feature_flags import FLAG_DEFS, snapshot
+
+    vals = snapshot()
+    rows: list[list[InlineKeyboardButton]] = []
+    for meta in FLAG_DEFS:
+        if not meta.premium:
+            continue
+        mark = "✅" if vals.get(meta.key, True) else "❌"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark} {meta.title}",
+                    callback_data=f"admin:flag:{meta.key}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="🎛 Barcha funksiyalar", callback_data="admin:flags")]
+    )
+    rows.append(admin_nav_row(back="adm:home"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_groups_list_kb(groups: list) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for g in groups:
+        star = "⭐ " if getattr(g, "is_main", False) else ""
+        title = (g.title or str(g.chat_id))[:36]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{star}{title}",
+                    callback_data=f"adm:grp:card:{g.chat_id}",
+                )
+            ]
+        )
+    rows.append(admin_nav_row(back="adm:home"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_group_card_kb(group) -> InlineKeyboardMarkup:
+    def mark(v: bool) -> str:
+        return "✅" if v else "❌"
+
+    cid = group.chat_id
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{mark(group.flag_relay_source)} So'rovlarni 426 ga",
+                callback_data=f"adm:grp:tog:{cid}:relay",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"{mark(group.flag_driver_posts)} Haydovchi e'lonlari",
+                callback_data=f"adm:grp:tog:{cid}:driver",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"{mark(group.flag_auto_posts)} Avto-e'lon",
+                callback_data=f"adm:grp:tog:{cid}:auto",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"{mark(group.flag_bot_ads)} Bot reklamasi",
+                callback_data=f"adm:grp:tog:{cid}:ads",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"{mark(group.flag_delete_original)} Asl xabarni o'chirish",
+                callback_data=f"adm:grp:tog:{cid}:delete",
+            )
+        ],
+    ]
+    if not group.is_main:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⭐ Asosiy qilish",
+                    callback_data=f"adm:grp:main:{cid}",
+                )
+            ]
+        )
+    rows.append(admin_nav_row(back="adm:grp:list"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_group_approve_kb(chat_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Yoqish", callback_data=f"adm:grp:ok:{chat_id}"),
+                InlineKeyboardButton(text="❌ Yo'q", callback_data=f"adm:grp:no:{chat_id}"),
+            ]
+        ]
+    )
+
+
+def admin_ads_menu_kb(*, enabled: bool, interval: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=("✅ Reklama yoqilgan" if enabled else "❌ Reklama o'chiq"),
+                    callback_data="adm:ad:toggle",
+                )
+            ],
+            [InlineKeyboardButton(text="✍️ Matnni o'zgartirish", callback_data="adm:ad:text")],
+            [InlineKeyboardButton(text="🖼 Rasm (ixtiyoriy)", callback_data="adm:ad:photo")],
+            [InlineKeyboardButton(text="👁 Oldindan ko'rish", callback_data="adm:ad:preview")],
+            [
+                InlineKeyboardButton(
+                    text=f"⏱ Interval: {interval} soat",
+                    callback_data="adm:ad:interval",
+                )
+            ],
+            [InlineKeyboardButton(text="🕐 Faol vaqt", callback_data="adm:ad:window")],
+            [InlineKeyboardButton(text="📤 Hozir yuborish", callback_data="adm:ad:now")],
+            admin_nav_row(back="adm:home"),
+        ]
+    )
+
+
+def admin_ad_interval_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="1 soat", callback_data="adm:ad:inth:1"),
+                InlineKeyboardButton(text="2 soat", callback_data="adm:ad:inth:2"),
+                InlineKeyboardButton(text="3 soat", callback_data="adm:ad:inth:3"),
+            ],
+            admin_nav_row(back="adm:ad:menu"),
+        ]
+    )
+
+
+def admin_stats_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📅 Bugun", callback_data="adm:stats:1"),
+                InlineKeyboardButton(text="🗓 7 kun", callback_data="adm:stats:7"),
+            ],
+            [
+                InlineKeyboardButton(text="🏆 Reyting", callback_data="admin:lb_menu"),
+            ],
+            admin_nav_row(back="adm:home"),
         ]
     )
 

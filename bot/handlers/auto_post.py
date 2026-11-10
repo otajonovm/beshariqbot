@@ -135,7 +135,7 @@ async def on_auto_post_start(
     message: Message, state: FSMContext, session: AsyncSession
 ) -> None:
     from bot.handlers.driver import show_driver_panel
-    from bot.services.feature_flags import is_enabled
+    from bot.services.feature_flags import driver_feature_enabled
 
     driver = await _active_driver(message, session)
     if driver is None:
@@ -144,7 +144,7 @@ async def on_auto_post_start(
             reply_markup=main_menu_kb(),
         )
         return
-    if not is_enabled("driver_auto_post"):
+    if not driver_feature_enabled("driver_auto_post", driver):
         await state.clear()
         await show_driver_panel(message, driver)
         return
@@ -411,13 +411,13 @@ async def auto_confirm_on(
 @router.message(F.text == BTN_AUTO_STOP)
 async def on_auto_stop(message: Message, state: FSMContext, session: AsyncSession) -> None:
     from bot.handlers.driver import show_driver_panel
-    from bot.services.feature_flags import is_enabled
+    from bot.services.feature_flags import driver_feature_enabled
 
     driver = await _active_driver(message, session)
     if driver is None:
         return
     await state.clear()
-    if not is_enabled("driver_auto_post"):
+    if not driver_feature_enabled("driver_auto_post", driver):
         # Flag o'chiq bo'lsa ham to'xtatib panel yangilanadi (xato yo'q)
         await stop_and_notify(
             message.bot, async_session_maker, driver.telegram_id, reason="manual"
@@ -442,13 +442,13 @@ async def on_auto_stop(message: Message, state: FSMContext, session: AsyncSessio
 @router.message(F.text == BTN_NO_SEATS)
 async def on_no_seats(message: Message, state: FSMContext, session: AsyncSession) -> None:
     from bot.handlers.driver import show_driver_panel
-    from bot.services.feature_flags import is_enabled
+    from bot.services.feature_flags import driver_feature_enabled
 
     driver = await _active_driver(message, session)
     if driver is None:
         return
     await state.clear()
-    if not is_enabled("driver_auto_post"):
+    if not driver_feature_enabled("driver_auto_post", driver):
         await stop_and_notify(
             message.bot, async_session_maker, driver.telegram_id, reason="no_seats"
         )

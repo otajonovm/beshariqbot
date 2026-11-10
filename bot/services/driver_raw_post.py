@@ -105,9 +105,17 @@ def compose_body(
     )
 
 
-def post_targets() -> list[int]:
-    """Ulangan guruhlar; 426. Global (faqat taksi hub) chiqarilgan."""
-    return list(settings.resolved_driver_post_group_ids)
+def post_targets(driver: Driver | None = None) -> list[int]:
+    """Ulangan guruhlar; 426. Global (faqat taksi hub) chiqarilgan.
+
+    multi_group o'chiq bo'lsa — faqat birinchi guruh.
+    """
+    from bot.services.feature_flags import driver_feature_enabled
+
+    targets = list(settings.resolved_driver_post_group_ids)
+    if driver is not None and not driver_feature_enabled("multi_group", driver):
+        return targets[:1]
+    return targets
 
 
 async def _send_with_retry(
@@ -172,7 +180,7 @@ async def post_to_main(
     payload: RawPayload,
 ) -> tuple[int | None, str | None, int | None]:
     """Birinchi guruhga darhol. (chat_id, error, message_id)."""
-    targets = post_targets()
+    targets = post_targets(driver)
     if not targets:
         return None, "Guruhlar sozlanmagan", None
     main = targets[0]
@@ -196,7 +204,7 @@ async def post_to_rest(
 ) -> tuple[list[int], list[tuple[int, str]], dict[int, int]]:
     """Qolgan guruhlarga parallel. Qaytaradi: ok, failed, {chat_id: message_id}."""
     skip = skip_chat_ids or set()
-    rest = [cid for cid in post_targets() if cid not in skip]
+    rest = [cid for cid in post_targets(driver) if cid not in skip]
     if not rest:
         return [], [], {}
     results = await asyncio.gather(

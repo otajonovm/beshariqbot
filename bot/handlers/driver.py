@@ -173,8 +173,9 @@ def _panel_kb(
     *,
     auto_active: bool | None = None,
 ) -> "ReplyKeyboardMarkup":
-    from bot.services.feature_flags import is_enabled
+    from bot.services.feature_flags import driver_feature_enabled, is_enabled
 
+    drv_obj: Driver | None = driver if isinstance(driver, Driver) else None
     if isinstance(driver, Driver):
         uid = driver.telegram_id
         from bot.services.auto_post import hydrate_last_raw
@@ -184,8 +185,8 @@ def _panel_kb(
         uid = driver
     else:
         uid = None
-    show_raw = is_enabled("driver_raw_post")
-    show_auto = is_enabled("driver_auto_post")
+    show_raw = driver_feature_enabled("driver_raw_post", drv_obj)
+    show_auto = driver_feature_enabled("driver_auto_post", drv_obj)
     has_last = bool(uid and show_raw and get_last_raw(uid))
     if auto_active is None and uid is not None and show_auto:
         from bot.services.auto_post import is_auto_active
@@ -196,10 +197,10 @@ def _panel_kb(
     return driver_panel_kb(
         has_last=has_last,
         auto_active=bool(auto_active),
-        show_wizard=is_enabled("driver_wizard"),
+        show_wizard=driver_feature_enabled("driver_wizard", drv_obj),
         show_raw=show_raw,
         show_auto=show_auto,
-        show_profile=is_enabled("driver_profile_edit"),
+        show_profile=driver_feature_enabled("driver_profile_edit", drv_obj),
     )
 
 
@@ -225,6 +226,15 @@ async def show_driver_panel(message: Message, driver: Driver) -> None:
     from bot.database.db_requests import get_active_auto_post
     from bot.database.models import async_session_maker
     from bot.services.auto_post import hydrate_last_raw, set_auto_active
+    from bot.services.feature_flags import driver_feature_enabled
+
+    # Blok / o'chirilgan — panel ochilmasin
+    if driver.is_soft_deleted() or driver.status == "banned":
+        await message.answer(
+            "⛔ Profilingiz yopiq. Admin bilan bog'laning.",
+            reply_markup=main_menu_kb(),
+        )
+        return
 
     hydrate_last_raw(driver)
     auto_line = ""
@@ -234,15 +244,13 @@ async def show_driver_panel(message: Message, driver: Driver) -> None:
             active = await get_active_auto_post(session, driver.telegram_id)
             auto_on = active is not None
             set_auto_active(driver.telegram_id, auto_on)
-            from bot.services.feature_flags import is_enabled
-
-            if active is not None and is_enabled("driver_auto_post"):
+            if active is not None and driver_feature_enabled("driver_auto_post", driver):
                 ends = active.ends_at.astimezone().strftime("%H:%M")
                 auto_line = (
                     f"\n⏰ <b>Avto-e'lon yoqilgan</b> "
                     f"(har {active.interval_sec}s, ~{ends} gacha)"
                 )
-            elif not is_enabled("driver_auto_post"):
+            elif not driver_feature_enabled("driver_auto_post", driver):
                 auto_on = False
     except Exception:
         logger.debug("auto status panel fail", exc_info=True)

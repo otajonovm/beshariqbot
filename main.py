@@ -23,6 +23,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bot.config import settings
 from bot.database.models import async_session_maker, dispose_db, init_db
 from bot.handlers.admin import router as admin_router
+from bot.handlers.admin_panel import router as admin_panel_router
 from bot.handlers.auto_post import router as auto_post_router
 from bot.handlers.driver import router as driver_router
 from bot.handlers.group import router as group_router
@@ -116,8 +117,18 @@ async def prepare(bot: Bot, scheduler: AsyncIOScheduler) -> None:
     await init_db()
     try:
         from bot.services.feature_flags import bootstrap_flags
+        from bot.services.app_settings import bootstrap_settings
 
         await bootstrap_flags(async_session_maker)
+        await bootstrap_settings(async_session_maker)
+        try:
+            from bot.services.bot_groups import ensure_known_groups
+
+            async with async_session_maker() as session:
+                await ensure_known_groups(session)
+                await session.commit()
+        except Exception:
+            logger.exception("Guruhlar seed qilinmadi")
     except Exception:
         logger.exception("Feature flags bootstrap")
     try:
@@ -329,6 +340,7 @@ async def main() -> None:
     dp.include_router(driver_router)
     dp.include_router(passenger_router)
     dp.include_router(group_router)
+    dp.include_router(admin_panel_router)
     dp.include_router(admin_router)
 
     dp.startup.register(prepare)

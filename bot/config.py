@@ -78,6 +78,18 @@ class Settings(BaseSettings):
     webhook_secret: str = Field(default="")
     # Railway Postgres DATABASE_URL. Bo'sh bo'lsa — lokal SQLite.
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
+    # --- To'lov / premium ---
+    driver_monthly_fee: int = Field(default=300_000, validation_alias="DRIVER_MONTHLY_FEE")
+    grace_days: int = Field(default=1, validation_alias="GRACE_DAYS")
+    # Mavjud haydovchilar uchun birinchi to'lov muddati (migratsiya)
+    payment_start_days: int = Field(default=7, validation_alias="PAYMENT_START_DAYS")
+    payments_enabled_default: bool = Field(default=True, validation_alias="PAYMENTS_ENABLED")
+    # Reklama defaultlari
+    ad_interval_hours_default: int = Field(default=2, validation_alias="AD_INTERVAL_HOURS")
+    ad_active_from_default: str = Field(default="07:00", validation_alias="AD_ACTIVE_FROM")
+    ad_active_to_default: str = Field(default="23:00", validation_alias="AD_ACTIVE_TO")
+    # Admin kontakt (to'lov/blok xabarlarida)
+    admin_contact: str = Field(default="", validation_alias="ADMIN_CONTACT")
 
     @field_validator("bot_token", mode="before")
     @classmethod

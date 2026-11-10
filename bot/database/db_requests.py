@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from bot.database.models import (
+    AdminActionLog,
     AutoPostSession,
     AutoPostStatus,
     Driver,
@@ -19,6 +20,7 @@ from bot.database.models import (
     Order,
     OrderStatus,
     OrderType,
+    PaymentRecord,
     User,
     utcnow,
 )
@@ -39,6 +41,18 @@ class Stats:
     orders_confirmed: int
     orders_taxi: int
     orders_parcel: int
+
+
+@dataclass(slots=True)
+class AdminPeriodStats:
+    new_drivers: int
+    active_drivers: int
+    banned_drivers: int
+    premium_drivers: int
+    payment_due: int
+    passenger_orders: int
+    driver_announces: int  # proxy: confirmed taxi + raw not tracked → orders taxi
+    ad_customers: int  # orders with source marker if any; else 0
 
 
 @dataclass(slots=True)
@@ -314,10 +328,9 @@ async def block_driver(session: AsyncSession, telegram_id: int) -> Driver | None
     driver = await session.get(Driver, telegram_id)
     if driver is None:
         return None
-    driver.status = DriverStatus.BANNED.value
-    driver.kicked_at = utcnow()
-    await session.flush()
-    return driver
+    from bot.services.driver_moderation import ban_driver
+
+    return await ban_driver(session, driver, reason="admin")
 
 
 async def unblock_driver(session: AsyncSession, telegram_id: int) -> Driver | None:
@@ -326,10 +339,9 @@ async def unblock_driver(session: AsyncSession, telegram_id: int) -> Driver | No
         return None
     if driver.status != DriverStatus.BANNED.value:
         return driver
-    driver.status = DriverStatus.ACTIVE.value
-    driver.kicked_at = None
-    await session.flush()
-    return driver
+    from bot.services.driver_moderation import unban_driver
+
+    return await unban_driver(session, driver)
 
 
 async def create_order(
@@ -345,6 +357,7 @@ async def create_order(
     departure_time: str | None = None,
     cargo_description: str | None = None,
     photo_file_id: str | None = None,
+    source: str | None = None,
 ) -> Order:
     order = Order(
         order_type=order_type,
@@ -358,6 +371,7 @@ async def create_order(
         departure_time=departure_time,
         cargo_description=cargo_description,
         photo_file_id=photo_file_id,
+        source=source,
         rejected_drivers=[],
     )
     session.add(order)
@@ -626,21 +640,87 @@ async def list_subscription_drivers(session: AsyncSession) -> list[Driver]:
     return list((await session.execute(stmt)).scalars().all())
 
 
+def _is_real_driver(d: Driver) -> bool:
+    if d.is_profile_complete() or d.is_legacy_or_approved() or d.status in {
+        DriverStatus.PENDING.value,
+        DriverStatus.REJECTED.value,
+        DriverStatus.BANNED.value,
+        DriverStatus.DELETED.value,
+    }:
+        return True
+    return len((d.full_name or "").strip()) >= 3
+
+
 async def list_drivers(session: AsyncSession, limit: int = 50) -> list[Driver]:
     """Barcha haydovchilar (stub emas: ism yoki majburiy maydon bor)."""
     stmt = select(Driver).order_by(Driver.created_at.desc()).limit(max(limit * 2, 50))
     all_rows = list((await session.execute(stmt)).scalars().all())
-    real: list[Driver] = []
-    for d in all_rows:
-        if d.is_profile_complete() or d.is_legacy_or_approved() or d.status in {
-            DriverStatus.PENDING.value,
-            DriverStatus.REJECTED.value,
-            DriverStatus.BANNED.value,
-        }:
-            real.append(d)
-        elif len((d.full_name or "").strip()) >= 3:
-            real.append(d)
+    real = [d for d in all_rows if _is_real_driver(d)]
     return real[:limit]
+
+
+async def search_drivers(
+    session: AsyncSession,
+    query: str | None = None,
+    *,
+    offset: int = 0,
+    limit: int = 10,
+    include_deleted: bool = True,
+) -> tuple[list[Driver], int]:
+    """Qidiruv: ism, telefon, davlat raqami. Sahifalash: (rows, total)."""
+    stmt = select(Driver).order_by(Driver.created_at.desc())
+    rows = [d for d in (await session.execute(stmt)).scalars().all() if _is_real_driver(d)]
+    if not include_deleted:
+        rows = [d for d in rows if not d.is_soft_deleted()]
+    q = (query or "").strip().lower()
+    if q:
+        filtered: list[Driver] = []
+        for d in rows:
+            hay = " ".join(
+                [
+                    str(d.telegram_id),
+                    (d.full_name or "").lower(),
+                    (d.phone or "").lower(),
+                    (d.car_number or "").lower(),
+                    (d.car_model or "").lower(),
+                ]
+            )
+            if q in hay or q.replace(" ", "") in hay.replace(" ", ""):
+                filtered.append(d)
+        rows = filtered
+    total = len(rows)
+    return rows[offset : offset + limit], total
+
+
+async def log_admin_action(
+    session: AsyncSession,
+    *,
+    admin_id: int,
+    action: str,
+    target_id: str | int | None = None,
+    detail: str | None = None,
+) -> None:
+    session.add(
+        AdminActionLog(
+            admin_id=admin_id,
+            action=action,
+            target_id=str(target_id) if target_id is not None else None,
+            detail=detail,
+        )
+    )
+    await session.flush()
+
+
+async def list_payment_history(
+    session: AsyncSession,
+    driver_id: int | None = None,
+    *,
+    limit: int = 20,
+) -> list[PaymentRecord]:
+    stmt = select(PaymentRecord).order_by(PaymentRecord.created_at.desc()).limit(limit)
+    if driver_id is not None:
+        stmt = stmt.where(PaymentRecord.driver_id == driver_id)
+    return list((await session.execute(stmt)).scalars().all())
 
 
 async def get_stats(session: AsyncSession) -> Stats:
@@ -649,7 +729,7 @@ async def get_stats(session: AsyncSession) -> Stats:
     drivers = [
         d
         for d in (await session.execute(select(Driver))).scalars().all()
-        if d.is_profile_complete()
+        if d.is_profile_complete() and not d.is_soft_deleted()
     ]
     active = sum(1 for d in drivers if d.is_access_valid(now))
     expired = sum(1 for d in drivers if d.status == DriverStatus.EXPIRED.value)
@@ -673,6 +753,54 @@ async def get_stats(session: AsyncSession) -> Stats:
         orders_confirmed=await _count(Order.status == OrderStatus.CONFIRMED.value),
         orders_taxi=await _count(Order.order_type == OrderType.TAXI.value),
         orders_parcel=await _count(Order.order_type == OrderType.PARCEL.value),
+    )
+
+
+async def get_admin_period_stats(
+    session: AsyncSession,
+    *,
+    days: int = 1,
+) -> AdminPeriodStats:
+    now = utcnow()
+    start = now - timedelta(days=max(1, days))
+    drivers = list((await session.execute(select(Driver))).scalars().all())
+    real = [d for d in drivers if _is_real_driver(d)]
+    new_drivers = sum(1 for d in real if d.created_at and d._aware(d.created_at) and d._aware(d.created_at) >= start)
+    active = sum(1 for d in real if d.is_access_valid(now))
+    banned = sum(1 for d in real if d.status == DriverStatus.BANNED.value)
+    premium = sum(1 for d in real if d.has_active_premium(now))
+    today = now.date()
+    payment_due = 0
+    for d in real:
+        if d.payment_exempt or d.is_soft_deleted():
+            continue
+        due = d._aware(d.payment_due_at)
+        if due and due.date() <= today:
+            payment_due += 1
+
+    async def _count(*where: Any) -> int:
+        stmt = select(func.count(Order.id))
+        for clause in where:
+            stmt = stmt.where(clause)
+        return int((await session.execute(stmt)).scalar_one())
+
+    passenger_orders = await _count(Order.created_at >= start)
+    ad_customers = await _count(Order.created_at >= start, Order.source == "ad")
+    # Haydovchi e'lonlari alohida jadvalda yo'q — tasdiqlangan taksi buyurtmalar proxy
+    driver_announces = await _count(
+        Order.created_at >= start,
+        Order.order_type == OrderType.TAXI.value,
+        Order.status == OrderStatus.CONFIRMED.value,
+    )
+    return AdminPeriodStats(
+        new_drivers=new_drivers,
+        active_drivers=active,
+        banned_drivers=banned,
+        premium_drivers=premium,
+        payment_due=payment_due,
+        passenger_orders=passenger_orders,
+        driver_announces=driver_announces,
+        ad_customers=ad_customers,
     )
 
 

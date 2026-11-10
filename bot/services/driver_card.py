@@ -244,7 +244,11 @@ def resolve_announce_photo(
     driver: Driver,
     photo_file_id: str | None,
 ) -> str | None:
-    """E'lon rasmi → profil rasmi → None."""
+    """E'lon rasmi → profil rasmi → None. photo_announce o'chiq bo'lsa None."""
+    from bot.services.feature_flags import driver_feature_enabled
+
+    if not driver_feature_enabled("photo_announce", driver):
+        return None
     if photo_file_id:
         return photo_file_id
     pid = (driver.photo_file_id or "").strip()
@@ -253,10 +257,10 @@ def resolve_announce_photo(
 
 def driver_announce_kb(driver: Driver) -> InlineKeyboardMarkup | None:
     """🚖 Zakas / 📞 tel — flag o'chiq bo'lsa qator yo'q. Ikkalasi o'chiq → None."""
-    from bot.services.feature_flags import is_enabled
+    from bot.services.feature_flags import driver_feature_enabled
 
-    show_order = is_enabled("order_button")
-    show_call = is_enabled("call_button")
+    show_order = driver_feature_enabled("order_button", driver)
+    show_call = driver_feature_enabled("call_button", driver)
     rows: list[list[InlineKeyboardButton]] = []
     if show_order:
         bot_user = settings.bot_username.lstrip("@")

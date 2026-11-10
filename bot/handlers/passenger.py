@@ -42,6 +42,37 @@ router.callback_query.filter(F.message.chat.type == "private")
 PHONE_RE = re.compile(r"^\+?\d{9,15}$")
 
 
+async def _notify_passenger_dm_drivers(bot, session: AsyncSession, order) -> None:
+    """Premium: yo'lovchi so'rovi lichkaga — hot path emas (buyurtma yaratilgach)."""
+    from sqlalchemy import select
+
+    from bot.database.models import Driver
+    from bot.services.feature_flags import driver_feature_enabled
+
+    try:
+        drivers = list((await session.execute(select(Driver))).scalars().all())
+    except Exception:
+        return
+    text = (
+        f"🚕 <b>Yangi yo'lovchi so'rovi</b> (#{order.id})\n"
+        f"📍 {order.direction_display()}\n"
+        f"🕐 {order.departure_time or '—'}\n"
+        f"👥 {order.seats or '—'}\n"
+        f"📞 <code>{order.phone}</code>"
+    )
+    for d in drivers:
+        if not d.is_access_valid():
+            continue
+        if not driver_feature_enabled("passenger_dm", d):
+            continue
+        try:
+            await bot.send_message(d.telegram_id, text)
+        except TelegramForbiddenError:
+            continue
+        except Exception:
+            continue
+
+
 async def _handle_driver_book(
     message: Message,
     session,
@@ -177,6 +208,15 @@ async def cmd_start(
         await _handle_driver_book(message, session, user, payload)
         return
 
+    # Reklama deep link: t.me/bot?start=order
+    if payload == "order" or payload.startswith("order"):
+        await state.update_data(order_source="ad")
+        await message.answer(
+            "🚕 <b>Taksi chaqirish</b>\n\nYo'nalishni tanlang:",
+            reply_markup=main_menu_kb(),
+        )
+        return
+
     # Mavjud tasdiqlangan haydovchi — qayta ro'yxat YO'Q, darhol panel.
     driver = await get_driver(session, user.id)
     if driver is not None and driver.is_legacy_or_approved() and driver.is_access_valid():
@@ -189,6 +229,14 @@ async def cmd_start(
             "Yoki «📢 E'lon berish» tugmasidan foydalaning."
         )
         await show_driver_panel(message, driver)
+        return
+    if driver is not None and (
+        driver.is_soft_deleted() or driver.status == DriverStatus.BANNED.value
+    ):
+        await message.answer(
+            "⛔ Haydovchi profilingiz yopiq.\n\nYo'lovchi sifatida buyurtma berishingiz mumkin:",
+            reply_markup=main_menu_kb(),
+        )
         return
     if driver is not None and driver.status == DriverStatus.PENDING.value:
         await message.answer(
@@ -233,11 +281,34 @@ async def on_direction_button(message: Message, state: FSMContext) -> None:
         )
         return
 
+    data = await state.get_data()
+    order_source = data.get("order_source")
     await state.clear()
-    await state.update_data(direction=direction)
+    await state.update_data(direction=direction, order_source=order_source)
+    await state.set_state(TaxiOrder.departure)
+    await message.answer(
+        f"🚖 Yo'nalish: <b>{label}</b>\n\n"
+        "Qachon ketasiz? Qisqa yozing (masalan: <i>Bugun 16:00</i> yoki <i>Hozir</i>).",
+        reply_markup=main_menu_kb(),
+    )
+
+
+@router.message(TaxiOrder.departure, F.text)
+async def taxi_departure(message: Message, state: FSMContext) -> None:
+    if message.text == BTN_CANCEL:
+        await _cancel_fsm(message, state)
+        return
+    text = (message.text or "").strip()
+    if len(text) < 2 or len(text) > 80:
+        await message.answer("Vaqtni 2–80 belgi orasida yozing.")
+        return
+    # Yo'nalish tugmalari bosilsa — qayta yo'nalish
+    if text in {BTN_BT, BTN_TB, BTN_PARCEL}:
+        return
+    await state.update_data(departure_time=text)
     await state.set_state(TaxiOrder.seats)
     await message.answer(
-        f"🚖 Yo'nalish: <b>{label}</b>\n\nNecha kishi ketadi?",
+        f"🕐 Vaqt: <b>{text}</b>\n\nNecha kishi ketadi?",
         reply_markup=seats_kb(),
     )
 
@@ -301,6 +372,7 @@ async def _finish_taxi(
     phone = _normalize_phone(contact_phone) or contact_phone
     data = await state.get_data()
     await upsert_user(session, user.id, user.full_name, user.username, phone=phone)
+    source = data.get("order_source")
     order = await create_order(
         session,
         order_type=OrderType.TAXI.value,
@@ -308,6 +380,8 @@ async def _finish_taxi(
         direction=data["direction"],
         phone=phone,
         seats=data.get("seats"),
+        departure_time=data.get("departure_time"),
+        source=source if isinstance(source, str) else None,
     )
     await session.commit()
     await state.clear()
@@ -315,6 +389,7 @@ async def _finish_taxi(
     from bot.handlers.group import publish_order_to_group
 
     posted = await publish_order_to_group(message.bot, session, order)
+    await _notify_passenger_dm_drivers(message.bot, session, order)
     if posted:
         await message.answer(
             f"✅ Buyurtma qabul qilindi! Raqam: <b>#{order.id}</b>\n\n"

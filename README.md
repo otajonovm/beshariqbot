@@ -141,18 +141,46 @@ Haydovchi e'loni guruhga rasm + qatorma-qator caption bilan chiqadi (`👤 Haydo
 
 **👤 Profilim** — ism, telefon, mashina, rang, raqam, joylar, yo'nalish, vaqt shabloni va rasm. Har maydon yonida **✏️** tugma: faqat shu maydon so'raladi, qolganlari o'zgarmaydi. Keyingi e'lonlarda yangi ma'lumot ishlatiladi; qayta registratsiya yo'q.
 
-### Super-admin funksiyalar (`/admin` → 🎛 Funksiyalar)
+### Admin panel (`/admin`) — qisqa yo'riqnoma
 
-O'chirilganda tugma **umuman chiqmaydi** (stub yo'q). Keyingi `/start` yoki panelga qaytishda klaviatura yangilanadi.
+Faqat `ADMIN_ID` / `ADMIN_IDS`. Bosh menyu 6 ta katta tugma:
+
+1. **🚖 Haydovchilar** — ro'yxat (10 tadan), qidiruv (ism/telefon/raqam). Kartochkada: bloklash, o'chirish (tiklash mumkin), premium, to'lov qabul, sana, xabar.
+2. **👥 Guruhlar** — bot ulangan guruhlar, huquqlar, flaglar (so'rov / e'lon / avto / reklama / o'chirish), asosiy guruh.
+3. **💳 To'lovlar** — tizimni yoqish/o'chirish, kutilayotgan/kechikkanlar, tarix. Kuniga 10:00 (Toshkent) eslatma; `GRACE_DAYS` dan keyin avto-blok.
+4. **⭐ Premium** — global funksiyalar. Har haydovchida alohida override + paket (7/30/90 kun).
+5. **📣 Reklama** — matn/rasm, interval 1–3 soat, faol vaqt, hozir yuborish. Tugma: `t.me/<bot>?start=order`.
+6. **📊 Statistika** — bugun / 7 kun.
+
+**Muhim:** mavjud haydovchilar o'chirilmaydi va qayta ro'yxatdan o'tkazilmaydi. Soft delete — ma'lumot bazada qoladi. Migratsiyada `payment_due_at` = hozir + `PAYMENT_START_DAYS` (standart 7) — hech kim darhol bloklanmaydi.
+
+Deploy oldidan DB zaxira nusxasi oling (yuqoridagi bo'lim).
+
+| Yangi env | Ma'nosi |
+| --- | --- |
+| `DRIVER_MONTHLY_FEE` | Oylik to'lov (so'm). Standart: `300000` |
+| `GRACE_DAYS` | To'lovdan keyin kutish kuni. Standart: `1` |
+| `PAYMENT_START_DAYS` | Mavjud haydovchilar uchun birinchi muddat. Standart: `7` |
+| `PAYMENTS_ENABLED` | To'lov tizimi boshlang'ich. Standart: `true` |
+| `ADMIN_CONTACT` | Blok/to'lov xabaridagi kontakt |
+| `AD_INTERVAL_HOURS` | Reklama interval default |
+| `AD_ACTIVE_FROM` / `AD_ACTIVE_TO` | Reklama faol vaqti |
+
+### Super-admin funksiyalar (`/admin` → ⭐ Premium)
+
+Global o'chiq → hech kimda ishlamaydi. Global yoqiq → haydovchi shaxsiy sozlamasi. O'chirilganda tugma **umuman chiqmaydi**.
 
 | Flag | Yashiradi / o'chiradi |
 | --- | --- |
 | `driver_auto_post` | ⏰ Avto-e'lon (+ To'xtatish / Joy yo'q) |
+| `photo_announce` | 🖼 e'lon rasmi |
 | `driver_wizard` | 📢 E'lon berish |
-| `driver_raw_post` | lichkaga tashlash + 🔁 takrorlash + panel yo'riqnomasi |
+| `driver_raw_post` | lichkaga tashlash + 🔁 takrorlash |
+| `multi_group` | 👥 ko'p guruhga chiqarish |
+| `passenger_dm` | 🚕 yo'lovchi so'rovi lichkaga |
 | `driver_profile_edit` | 👤 Profilim |
-| `driver_photo_edit` | ✏️ Rasm (profil ochiq qolishi mumkin) |
-| `driver_ask_time` | 🕐 vaqt so'rovi (oxirgi yoki «Hozir») |
+| `driver_photo_edit` | ✏️ Rasm (profil) |
+| `driver_ask_time` | 🕐 vaqt so'rovi |
 | `call_button` | 📞 guruh e'lonida |
 | `order_button` | 🚖 Zakas berish |
 | `passenger_relay` | yo'lovchi relay |

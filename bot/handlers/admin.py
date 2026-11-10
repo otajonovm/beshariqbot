@@ -364,8 +364,21 @@ async def cmd_groups(message: Message) -> None:
 
 
 @router.callback_query(F.data == "admin:groups")
-async def cb_groups(callback: CallbackQuery) -> None:
-    await callback.message.answer(await _groups_status_text(callback.bot))
+async def cb_groups(callback: CallbackQuery, session: AsyncSession) -> None:
+    from bot.keyboards.inline_kb import admin_groups_list_kb
+    from bot.services.bot_groups import list_groups
+
+    groups = await list_groups(session)
+    try:
+        await callback.message.edit_text(
+            "👥 <b>Guruhlar</b>",
+            reply_markup=admin_groups_list_kb(groups),
+        )
+    except TelegramBadRequest:
+        await callback.message.answer(
+            "👥 <b>Guruhlar</b>",
+            reply_markup=admin_groups_list_kb(groups),
+        )
     await callback.answer()
 
 
@@ -416,18 +429,6 @@ async def cmd_delword(message: Message, session: AsyncSession) -> None:
     await message.answer(f"🗑 O'chirildi: <code>{phrase}</code>")
 
 
-@router.callback_query(F.data == "admin:stats")
-async def cb_stats(callback: CallbackQuery, session: AsyncSession) -> None:
-    if callback.message is None:
-        await callback.answer()
-        return
-    await callback.message.answer(await _relay_stats(session))
-    stats = await get_stats(session)
-    recent = await list_drivers(session, limit=10)
-    await callback.message.answer(_fmt_stats(stats, recent))
-    await callback.answer()
-
-
 @router.callback_query(F.data == "admin:lb_menu")
 async def cb_lb_menu(callback: CallbackQuery) -> None:
     try:
@@ -456,11 +457,29 @@ async def cb_back_main(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "admin:flags")
 async def cb_flags(callback: CallbackQuery) -> None:
+    from bot.keyboards.inline_kb import admin_nav_row
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    from bot.services.feature_flags import FLAG_DEFS, snapshot as snap
+
+    vals = snap()
+    rows: list[list[InlineKeyboardButton]] = []
+    for meta in FLAG_DEFS:
+        mark = "✅" if vals.get(meta.key, True) else "❌"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark} {meta.title}",
+                    callback_data=f"admin:flag:{meta.key}",
+                )
+            ]
+        )
+    rows.append(admin_nav_row(back="adm:prem:menu"))
     text = flags_status_lines()
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
     try:
-        await callback.message.edit_text(text, reply_markup=admin_flags_kb())
+        await callback.message.edit_text(text, reply_markup=kb)
     except TelegramBadRequest:
-        await callback.message.answer(text, reply_markup=admin_flags_kb())
+        await callback.message.answer(text, reply_markup=kb)
     await callback.answer()
 
 
@@ -494,11 +513,21 @@ async def cb_flag_toggle(callback: CallbackQuery, session: AsyncSession) -> None
             await stop_auto_post(session, int(driver_id), reason="manual")
         await session.commit()
 
-    text = flags_status_lines(snapshot())
-    try:
-        await callback.message.edit_text(text, reply_markup=admin_flags_kb())
-    except TelegramBadRequest:
-        await callback.message.answer(text, reply_markup=admin_flags_kb())
+    # Premium menyuga qaytish yoki flags
+    from bot.keyboards.inline_kb import admin_premium_global_kb
+
+    if meta.premium:
+        text = (
+            "⭐ <b>Premium</b>\n\n"
+            "Global o'chiq bo'lsa — hech kimda ishlamaydi."
+        )
+        try:
+            await callback.message.edit_text(text, reply_markup=admin_premium_global_kb())
+        except TelegramBadRequest:
+            await callback.message.answer(text, reply_markup=admin_premium_global_kb())
+    else:
+        await cb_flags(callback)
+        return
     state = "yoqildi" if new_val else "o'chirildi"
     await callback.answer(f"{meta.title}: {state}")
 
@@ -524,15 +553,20 @@ async def cb_lb_post(callback: CallbackQuery, session: AsyncSession) -> None:
 
 @router.callback_query(F.data == "admin:drivers")
 async def cb_drivers(callback: CallbackQuery, session: AsyncSession) -> None:
-    drivers = await list_drivers(session)
-    if not drivers:
-        await callback.message.answer("Haydovchilar yo'q.")
-        await callback.answer()
-        return
-    await callback.message.answer(
-        "🚘 <b>Haydovchilar</b> (vaqt bilan)\n\n"
-        + "\n".join(_driver_line(d) for d in drivers[:40])
-    )
+    from bot.database.db_requests import search_drivers
+    from bot.keyboards.inline_kb import admin_drivers_list_kb
+
+    rows, total = await search_drivers(session, None, offset=0, limit=10)
+    try:
+        await callback.message.edit_text(
+            f"🚖 <b>Haydovchilar</b> ({total} ta)",
+            reply_markup=admin_drivers_list_kb(rows, page=0, total=total),
+        )
+    except TelegramBadRequest:
+        await callback.message.answer(
+            f"🚖 <b>Haydovchilar</b> ({total} ta)",
+            reply_markup=admin_drivers_list_kb(rows, page=0, total=total),
+        )
     await callback.answer()
 
 

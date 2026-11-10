@@ -57,6 +57,7 @@ class DriverStatus(str, Enum):
     EXPIRED = "expired"
     BANNED = "banned"
     REJECTED = "rejected"
+    DELETED = "deleted"  # soft delete — ma'lumot bazada qoladi
 
 
 # Majburiy / ixtiyoriy profil maydonlari (admin /drivers uchun)
@@ -156,6 +157,19 @@ class Driver(Base):
     notified_sub_5: Mapped[bool] = mapped_column(Boolean, default=False)
     notified_sub_1: Mapped[bool] = mapped_column(Boolean, default=False)
     kicked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Soft delete + to'lov / premium (migratsiya orqali)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    block_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    payment_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    monthly_fee: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    payment_exempt: Mapped[bool] = mapped_column(Boolean, default=False)
+    notified_pay_3: Mapped[bool] = mapped_column(Boolean, default=False)
+    notified_pay_1: Mapped[bool] = mapped_column(Boolean, default=False)
+    notified_pay_0: Mapped[bool] = mapped_column(Boolean, default=False)
+    premium_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Premium funksiya override: {flag_key: bool}
+    feature_overrides: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    notified_premium_end: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now()
     )
@@ -217,12 +231,36 @@ class Driver(Base):
             and not self.missing_required_fields()
         )
 
+    def is_soft_deleted(self) -> bool:
+        return self.status == DriverStatus.DELETED.value or self.deleted_at is not None
+
     def is_legacy_or_approved(self) -> bool:
         """Mavjud/tasdiqlangan haydovchi — qayta ariza kerak emas."""
+        if self.is_soft_deleted():
+            return False
         return self.status in {
             DriverStatus.ACTIVE.value,
             DriverStatus.EXPIRED.value,
         }
+
+    def has_active_premium(self, now: datetime | None = None) -> bool:
+        now = now or utcnow()
+        until = self._aware(self.premium_until)
+        return until is not None and until > now
+
+    def payment_status(self, now: datetime | None = None) -> str:
+        """to'langan | kutilmoqda | kechikkan | bepul | o'chiq."""
+        if self.payment_exempt:
+            return "bepul"
+        due = self._aware(self.payment_due_at)
+        if due is None:
+            return "o'chiq"
+        now = now or utcnow()
+        if due.date() > now.date():
+            return "to'langan"
+        if due.date() == now.date():
+            return "kutilmoqda"
+        return "kechikkan"
 
     def subscription_days_left(self, now: datetime | None = None) -> int | None:
         """Obuna tugashiga qolgan to'liq kunlar; obuna yo'q bo'lsa None."""
@@ -235,6 +273,8 @@ class Driver(Base):
     def is_access_valid(self, now: datetime | None = None) -> bool:
         """Buyurtma olish huquqi: bloklanmagan; muddati o'tgan to'langan obuna bo'lmasin."""
         now = now or utcnow()
+        if self.is_soft_deleted():
+            return False
         if self.status in {
             DriverStatus.BANNED.value,
             DriverStatus.PENDING.value,
@@ -321,6 +361,8 @@ class Order(Base):
     last_cancel_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     claim_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # order | ad | book_... — qayerdan kelgani
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now()
     )
@@ -446,6 +488,80 @@ class FeatureFlag(Base):
     )
 
 
+class AppSetting(Base):
+    """DB sozlamalari (kesh bilan). value — JSON matn."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class BotGroup(Base):
+    """Bot ulangan guruh va uning flaglari."""
+
+    __tablename__ = "bot_groups"
+
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    member_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    can_post: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    can_delete: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Yo'lovchi so'rovlarini asosiy guruhga olib o'tish
+    flag_relay_source: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Haydovchi e'lonlari
+    flag_driver_posts: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Avto-e'lon
+    flag_auto_posts: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Bot reklamasi
+    flag_bot_ads: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Asl xabarni o'chirish (sweep)
+    flag_delete_original: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_main: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Admin "Yoqasizmi?" tasdig'i
+    approved: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_ad_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class PaymentRecord(Base):
+    """Haydovchi to'lov tarixi."""
+
+    __tablename__ = "payment_records"
+    __table_args__ = (Index("ix_payment_driver_created", "driver_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    driver_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    amount: Mapped[int] = mapped_column(Integer, default=0)
+    days: Mapped[int] = mapped_column(Integer, default=30)
+    accepted_by: Mapped[int] = mapped_column(BigInteger)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
+    )
+
+
+class AdminActionLog(Base):
+    """Admin amallari jurnali."""
+
+    __tablename__ = "admin_action_logs"
+    __table_args__ = (Index("ix_admin_log_created", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    admin_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    action: Mapped[str] = mapped_column(String(64))
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
+    )
+
+
 class RelayHit(Base):
     """Manba guruhdan asosiy guruhga yuborilgan yo'lovchi xabari."""
 
@@ -535,6 +651,7 @@ async def init_db() -> None:
             driver_cols = {col["name"] for col in inspect(sync_conn).get_columns("drivers")}
             dialect = sync_conn.dialect.name
             bool_default = "FALSE" if dialect == "postgresql" else "0"
+            ts_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
             for col_name in ("notified_sub_10", "notified_sub_5", "notified_sub_1"):
                 if col_name not in driver_cols:
                     sync_conn.execute(
@@ -561,6 +678,58 @@ async def init_db() -> None:
                 if col_name not in driver_cols:
                     sync_conn.execute(
                         text(f"ALTER TABLE drivers ADD COLUMN {col_name} {col_type}")
+                    )
+
+            # To'lov / premium / soft-delete (idempotent).
+            # payment_due_at birinchi marta qo'shilganda: mavjud haydovchilar
+            # darhol bloklanmasin — PAYMENT_START_DAYS (default 7) kun keyin.
+            payment_bootstrap = "payment_due_at" not in driver_cols
+            admin_columns: list[tuple[str, str]] = [
+                ("deleted_at", ts_type),
+                ("block_reason", "VARCHAR(32)"),
+                ("payment_due_at", ts_type),
+                ("monthly_fee", "INTEGER"),
+                ("payment_exempt", f"BOOLEAN DEFAULT {bool_default}"),
+                ("notified_pay_3", f"BOOLEAN DEFAULT {bool_default}"),
+                ("notified_pay_1", f"BOOLEAN DEFAULT {bool_default}"),
+                ("notified_pay_0", f"BOOLEAN DEFAULT {bool_default}"),
+                ("premium_until", ts_type),
+                (
+                    "feature_overrides",
+                    "JSON" if dialect == "postgresql" else "TEXT",
+                ),
+                ("notified_premium_end", f"BOOLEAN DEFAULT {bool_default}"),
+            ]
+            for col_name, col_type in admin_columns:
+                if col_name not in driver_cols:
+                    sync_conn.execute(
+                        text(f"ALTER TABLE drivers ADD COLUMN {col_name} {col_type}")
+                    )
+            if payment_bootstrap:
+                from bot.config import settings as _cfg
+
+                start_days = max(1, int(getattr(_cfg, "payment_start_days", 7) or 7))
+                if dialect == "postgresql":
+                    sync_conn.execute(
+                        text(
+                            f"""
+                            UPDATE drivers
+                            SET payment_due_at = NOW() + INTERVAL '{start_days} days'
+                            WHERE payment_due_at IS NULL
+                              AND LOWER(COALESCE(status, '')) NOT IN ('deleted')
+                            """
+                        )
+                    )
+                else:
+                    sync_conn.execute(
+                        text(
+                            f"""
+                            UPDATE drivers
+                            SET payment_due_at = datetime('now', '+{start_days} days')
+                            WHERE payment_due_at IS NULL
+                              AND LOWER(COALESCE(status, '')) NOT IN ('deleted')
+                            """
+                        )
                     )
             if legacy_activation:
                 # Faqat "noma'lum" statuslarni active qiladi.
@@ -603,6 +772,8 @@ async def init_db() -> None:
             if "claimed_at" not in order_cols:
                 col_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
                 sync_conn.execute(text(f"ALTER TABLE orders ADD COLUMN claimed_at {col_type}"))
+            if "source" not in order_cols:
+                sync_conn.execute(text("ALTER TABLE orders ADD COLUMN source VARCHAR(32)"))
 
             # Eski SQLite: orders.driver_id → drivers FK ni olib tashlash
             if dialect != "sqlite":
