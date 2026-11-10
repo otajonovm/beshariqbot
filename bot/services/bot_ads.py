@@ -189,18 +189,6 @@ def _effective_interval(group: BotGroup, base_sec: int, now: datetime) -> int:
     return max(30, base_sec)
 
 
-async def _delete_old(bot: Bot, group: BotGroup) -> None:
-    mid = group.last_ad_message_id
-    if not mid:
-        return
-    try:
-        await bot.delete_message(group.chat_id, mid)
-    except (TelegramBadRequest, TelegramForbiddenError) as exc:
-        logger.info("Eski reklama o'chmadi chat=%s mid=%s: %s", group.chat_id, mid, exc)
-    except Exception:
-        logger.exception("Eski reklama o'chirish xato chat=%s", group.chat_id)
-
-
 async def _send_ad_message(
     bot: Bot,
     chat_id: int,
@@ -234,7 +222,6 @@ async def send_one_group(
     chat_id = group.chat_id
 
     await wait_chat_slot(chat_id)
-    await _delete_old(bot, group)
 
     try:
         msg = await _send_ad_message(bot, chat_id, caption, banner, kb)
