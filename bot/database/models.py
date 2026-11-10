@@ -501,15 +501,20 @@ class AppSetting(Base):
 
 
 class BotGroup(Base):
-    """Bot ulangan guruh va uning flaglari."""
+    """Bot ulangan guruh / kanal va uning flaglari."""
 
     __tablename__ = "bot_groups"
 
     chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     title: Mapped[str] = mapped_column(String(255), default="")
+    # group | supergroup | channel
+    chat_type: Mapped[str] = mapped_column(String(16), default="supergroup")
     member_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     can_post: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     can_delete: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    def is_channel(self) -> bool:
+        return (self.chat_type or "") == "channel"
     # Yo'lovchi so'rovlarini asosiy guruhga olib o'tish
     flag_relay_source: Mapped[bool] = mapped_column(Boolean, default=True)
     # Haydovchi e'lonlari
@@ -822,6 +827,7 @@ async def init_db() -> None:
                     ("ad_boost_until", ts_type),
                     ("ad_permission_warned", f"BOOLEAN DEFAULT {bool_def}"),
                     ("last_ad_message_id", "INTEGER"),
+                    ("chat_type", "VARCHAR(16) DEFAULT 'supergroup'"),
                 ):
                     if col_name not in gcols:
                         sync_conn.execute(

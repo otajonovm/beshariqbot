@@ -139,9 +139,9 @@ def resolve_banner_source(photo_file_id: str | None) -> str | Path | None:
 
 
 async def list_ad_groups(session: AsyncSession) -> list[BotGroup]:
-    """Bot admin / yozishi mumkin bo'lgan barcha guruhlar (flag_bot_ads o'chiq = istisno).
+    """Bot admin bo'lgan guruh + kanallar (flag_bot_ads o'chiq = istisno).
 
-    426 Global: flag yoqiq bo'lsa chiqadi; yoki alohida «426 Global reklama» yoqiq.
+    426 Global: flag yoqiq yoki «426 Global reklama» yoqiq bo'lsa.
     """
     from bot.services.bot_groups import ensure_known_groups
 
@@ -156,11 +156,11 @@ async def list_ad_groups(session: AsyncSession) -> list[BotGroup]:
         if g.can_post is False:
             continue
         is_main = g.is_main or g.chat_id == main_id
-        if is_main:
+        if is_main and not g.is_channel():
             if g.flag_bot_ads or cfg["main_group_enabled"]:
                 out.append(g)
             continue
-        # Oddiy guruh: reklama flagi yoqiq (default ON)
+        # Guruh yoki kanal: reklama flagi yoqiq (default ON)
         if g.flag_bot_ads:
             out.append(g)
     return out
@@ -457,7 +457,7 @@ def status_summary_text(*, group_count: int = 0) -> str:
         + f"\nFaol soatlar: {cfg['active_from']}–{cfg['active_to']}\n"
         f"Banner: {banner}\n"
         f"Matn: <i>{text_preview}</i>\n"
-        f"Guruhlar: <b>{group_count}</b>\n"
+        f"Guruh/kanallar: <b>{group_count}</b>\n"
         f"426 Global: {'✅' if cfg['main_group_enabled'] else '❌'}\n"
         f"Oxirgi yuborilgan: {last}"
     )

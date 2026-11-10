@@ -23,20 +23,28 @@ async def upsert_group(
     *,
     title: str = "",
     approved: bool | None = None,
+    chat_type: str | None = None,
 ) -> BotGroup:
     row = await session.get(BotGroup, chat_id)
     main_id = app_settings.resolved_main_group_id()
+    ctype = (chat_type or "supergroup").strip().lower()
+    if ctype not in {"group", "supergroup", "channel"}:
+        ctype = "supergroup"
+    is_channel = ctype == "channel"
     if row is None:
-        # Yangi: reklama default ON (bot admin guruhlariga); main → e'lon o'chiq
-        is_main = chat_id == main_id
+        # Yangi: reklama default ON; kanalda faqat reklama (relay/e'lon o'chiq)
+        is_main = chat_id == main_id and not is_channel
         row = BotGroup(
             chat_id=chat_id,
             title=title or "",
-            flag_relay_source=not is_main,
-            flag_driver_posts=not is_main,
-            flag_auto_posts=not is_main,
+            chat_type=ctype,
+            flag_relay_source=not is_main and not is_channel,
+            flag_driver_posts=not is_main and not is_channel,
+            flag_auto_posts=not is_main and not is_channel,
             flag_bot_ads=True,
-            flag_delete_original=chat_id in settings.resolved_sweep_group_ids,
+            flag_delete_original=(
+                False if is_channel else chat_id in settings.resolved_sweep_group_ids
+            ),
             is_main=is_main,
             approved=True if approved is None else bool(approved),
         )
@@ -44,6 +52,8 @@ async def upsert_group(
     else:
         if title:
             row.title = title
+        if chat_type:
+            row.chat_type = ctype
         if approved is not None:
             row.approved = bool(approved)
         row.updated_at = utcnow()
@@ -135,6 +145,9 @@ async def refresh_group_meta(bot: Bot, session: AsyncSession, chat_id: int) -> B
     try:
         chat: Chat = await bot.get_chat(chat_id)
         row.title = chat.title or row.title or str(chat_id)
+        ctype = getattr(chat, "type", None) or row.chat_type or "supergroup"
+        if isinstance(ctype, str):
+            row.chat_type = ctype
         try:
             row.member_count = await bot.get_chat_member_count(chat_id)
         except (TelegramBadRequest, TelegramForbiddenError):
@@ -142,20 +155,28 @@ async def refresh_group_meta(bot: Bot, session: AsyncSession, chat_id: int) -> B
         me = await bot.get_me()
         member = await bot.get_chat_member(chat_id, me.id)
         status = member.status
+        is_channel = row.chat_type == "channel"
         if status in {"administrator", "creator"}:
-            row.can_post = getattr(member, "can_post_messages", True) is not False
+            # Kanalda post uchun can_post_messages kerak
+            can_post = getattr(member, "can_post_messages", None)
+            if is_channel:
+                row.can_post = True if can_post is None else bool(can_post)
+                if status == "creator":
+                    row.can_post = True
+            else:
+                row.can_post = can_post is not False
             row.can_delete = bool(getattr(member, "can_delete_messages", False))
             if status == "creator":
-                row.can_post = True
                 row.can_delete = True
-        elif status == "member":
+        elif status == "member" and not is_channel:
             row.can_post = True
             row.can_delete = False
         else:
+            # Kanalda oddiy member post qila olmaydi
             row.can_post = False
             row.can_delete = False
     except (TelegramBadRequest, TelegramForbiddenError) as exc:
-        logger.info("Guruh meta o'qilmadi %s: %s", chat_id, exc)
+        logger.info("Guruh/kanal meta o'qilmadi %s: %s", chat_id, exc)
         row.can_post = False
         row.can_delete = False
     row.updated_at = utcnow()
@@ -164,14 +185,14 @@ async def refresh_group_meta(bot: Bot, session: AsyncSession, chat_id: int) -> B
 
 
 def driver_post_chat_ids(groups: list[BotGroup] | None, *, auto: bool = False) -> list[int]:
-    """Haydovchi / avto e'lon guruhlari (asosiy emas)."""
+    """Haydovchi / avto e'lon guruhlari (asosiy emas, kanal emas)."""
     if not groups:
         return list(settings.resolved_driver_post_group_ids)
     out: list[int] = []
     for g in groups:
         if not g.approved:
             continue
-        if g.is_main:
+        if g.is_main or g.is_channel():
             continue
         if auto and not g.flag_auto_posts:
             continue
@@ -182,7 +203,11 @@ def driver_post_chat_ids(groups: list[BotGroup] | None, *, auto: bool = False) -
 
 
 def relay_source_ids(groups: list[BotGroup] | None) -> list[int] | None:
-    """None = eski config mantiqi."""
+    """None = eski config mantiqi. Kanallar relay manbasi emas."""
     if not groups:
         return None
-    return [g.chat_id for g in groups if g.approved and g.flag_relay_source and not g.is_main]
+    return [
+        g.chat_id
+        for g in groups
+        if g.approved and g.flag_relay_source and not g.is_main and not g.is_channel()
+    ]

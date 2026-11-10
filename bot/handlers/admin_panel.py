@@ -778,7 +778,7 @@ async def adm_grp_list(callback: CallbackQuery, session: AsyncSession) -> None:
     groups = await list_groups(session)
     await _edit_or_answer(
         callback,
-        "👥 <b>Guruhlar</b>\nGuruhni tanlang:",
+        "👥 <b>Guruh / kanallar</b>\nTanlang (reklama default yoqiq):",
         admin_groups_list_kb(groups),
     )
     await callback.answer()
@@ -788,18 +788,28 @@ def _group_card_text(g) -> str:
     post = "✅" if g.can_post else "❌"
     delete = "✅" if g.can_delete else "❌"
     warn = ""
+    is_ch = getattr(g, "chat_type", "") == "channel" or (
+        hasattr(g, "is_channel") and g.is_channel()
+    )
     if g.can_post is False:
-        warn += "\n🔴 Botga <b>xabar yozish</b> huquqini bering."
-    if g.can_delete is False and g.flag_delete_original:
+        warn += (
+            "\n🔴 Botga kanalda <b>xabar yozish (Post Messages)</b> huquqini bering."
+            if is_ch
+            else "\n🔴 Botga <b>xabar yozish</b> huquqini bering."
+        )
+    if g.can_delete is False and g.flag_delete_original and not is_ch:
         warn += "\n🔴 Botga <b>o'chirish</b> huquqini bering."
     members = g.member_count if g.member_count is not None else "—"
     star = "⭐ Asosiy\n" if g.is_main else ""
+    kind = "📢 Kanal" if is_ch else "👥 Guruh"
+    ad = "✅" if g.flag_bot_ads else "❌"
     return (
-        f"👥 <b>{g.title or g.chat_id}</b>\n"
+        f"{kind}: <b>{g.title or g.chat_id}</b>\n"
         f"{star}"
         f"ID: <code>{g.chat_id}</code>\n"
         f"A'zolar: {members}\n"
-        f"Huquq: yozish {post} · o'chirish {delete}"
+        f"Huquq: yozish {post} · o'chirish {delete}\n"
+        f"📣 Reklama: {ad}"
         f"{warn}"
     )
 

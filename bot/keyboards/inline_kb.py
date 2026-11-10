@@ -401,11 +401,13 @@ def admin_groups_list_kb(groups: list) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for g in groups:
         star = "⭐ " if getattr(g, "is_main", False) else ""
-        title = (g.title or str(g.chat_id))[:36]
+        kind = "📢 " if getattr(g, "chat_type", "") == "channel" else ""
+        ad = "" if getattr(g, "flag_bot_ads", True) else "🔇"
+        title = (g.title or str(g.chat_id))[:32]
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{star}{title}",
+                    text=f"{star}{kind}{ad}{title}",
                     callback_data=f"adm:grp:card:{g.chat_id}",
                 )
             ]

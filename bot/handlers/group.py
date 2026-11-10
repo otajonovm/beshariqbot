@@ -39,27 +39,38 @@ async def create_driver_invite_links(_bot: Bot) -> list[str]:
 
 @router.my_chat_member()
 async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
-    if event.chat.type not in {"group", "supergroup"}:
+    chat_type = event.chat.type
+    if chat_type not in {"group", "supergroup", "channel"}:
         return
     from bot.relay.admins import admin_cache
     from bot.relay.service import note_group
 
     user = event.new_chat_member.user
-    if user is not None:
+    if user is not None and chat_type != "channel":
         admin_cache.apply_status(event.chat.id, user.id, event.new_chat_member.status)
-    if event.new_chat_member.status not in {"administrator", "member", "creator"}:
+
+    # Kanal: faqat admin/creator (member post qila olmaydi)
+    if chat_type == "channel":
+        if event.new_chat_member.status not in {"administrator", "creator"}:
+            return
+    elif event.new_chat_member.status not in {"administrator", "member", "creator"}:
         return
 
     note_group(event.chat.id, event.chat.title or "", event.new_chat_member.status)
     known = event.chat.id in settings.group_ids
-    status = "ulangan" if known else "noma'lum guruh (sozlamada yo'q)"
-    logger.info("Bot guruhga qo'shildi: %s %s (%s)", event.chat.id, event.chat.title, status)
-    title = event.chat.title or "guruh"
-    # DB ga yozish + admin "Yoqasizmi?"
+    kind = "kanal" if chat_type == "channel" else "guruh"
+    logger.info(
+        "Bot %sga qo'shildi: %s %s (%s)",
+        kind,
+        event.chat.id,
+        event.chat.title,
+        "ulangan" if known else "yangi",
+    )
+    title = event.chat.title or kind
     try:
         from bot.database.models import async_session_maker
         from bot.keyboards.inline_kb import admin_group_approve_kb
-        from bot.services.bot_groups import upsert_group
+        from bot.services.bot_groups import refresh_group_meta, upsert_group
 
         async with async_session_maker() as session:
             g = await upsert_group(
@@ -67,24 +78,22 @@ async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
                 event.chat.id,
                 title=title,
                 approved=True,
+                chat_type=chat_type,
             )
-            # Bot admin/a'zo bo'lsa — reklama default yoqiladi
-            if event.new_chat_member.status in {"administrator", "creator", "member"}:
-                g.flag_bot_ads = True
-                from bot.services.bot_groups import refresh_group_meta
-
-                await refresh_group_meta(event.bot, session, event.chat.id)
+            g.flag_bot_ads = True
+            await refresh_group_meta(event.bot, session, event.chat.id)
             await session.commit()
     except Exception:
-        logger.exception("Yangi guruh DB ga yozilmadi")
+        logger.exception("Yangi %s DB ga yozilmadi", kind)
 
     from bot.keyboards.inline_kb import admin_group_approve_kb
 
     await notify_admins(
         event.bot,
-        f"Yangi guruh: <b>{title}</b>. Yoqasizmi?\n"
+        f"Yangi {kind}: <b>{title}</b>. Yoqasizmi?\n"
         f"ID: <code>{event.chat.id}</code>\n"
-        f"{'✅ Sozlamada bor' if known else '⚠️ Hali ro‘yxatda yo‘q'}",
+        f"{'✅ Sozlamada bor' if known else '⚠️ Hali ro‘yxatda yo‘q'}\n"
+        f"📣 Reklama: default yoqilgan",
         reply_markup=admin_group_approve_kb(event.chat.id),
     )
 

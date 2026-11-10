@@ -157,6 +157,36 @@ async def test_list_ad_groups_includes_all_when_flag_on(session):
 
 
 @pytest.mark.asyncio
+async def test_list_ad_groups_includes_channels(session):
+    apps._cache["ad_all_admin_groups_v1"] = True
+    session.add(
+        BotGroup(
+            chat_id=-3001,
+            title="Taxi Channel",
+            chat_type="channel",
+            flag_bot_ads=True,
+            approved=True,
+            can_post=True,
+        )
+    )
+    session.add(
+        BotGroup(
+            chat_id=-3002,
+            title="No post channel",
+            chat_type="channel",
+            flag_bot_ads=True,
+            approved=True,
+            can_post=False,
+        )
+    )
+    await session.commit()
+    groups = await bot_ads.list_ad_groups(session)
+    ids = {g.chat_id for g in groups}
+    assert -3001 in ids
+    assert -3002 not in ids
+
+
+@pytest.mark.asyncio
 async def test_record_ad_click(session):
     await bot_ads.record_ad_click(session, 42)
     await session.commit()
