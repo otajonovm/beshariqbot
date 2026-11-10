@@ -96,3 +96,5 @@ class AdminAdEdit(StatesGroup):
     text = State()
     photo = State()
     window = State()
+    button = State()
+    phone = State()

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from collections import defaultdict, deque
 from typing import Any
 
 from aiogram import Bot
@@ -32,12 +30,6 @@ logger = logging.getLogger(__name__)
 # Faol sessiyalar (panel tugmasi uchun; restart dan keyin scheduler yangilaydi)
 _active_driver_ids: set[int] = set()
 
-# chat_id -> yuborish vaqtlari (~20/min/guruh)
-_chat_times: dict[int, deque[float]] = defaultdict(deque)
-_chat_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
-_WINDOW = 60.0
-_LIMIT = 18
-
 
 def is_auto_active(driver_id: int) -> bool:
     return driver_id in _active_driver_ids
@@ -55,27 +47,11 @@ def sync_active_from_rows(driver_ids: list[int]) -> None:
     _active_driver_ids.update(driver_ids)
 
 
-def _purge(chat_id: int, now: float) -> None:
-    times = _chat_times[chat_id]
-    while times and now - times[0] >= _WINDOW:
-        times.popleft()
-
-
 async def _wait_chat_slot(chat_id: int) -> float:
-    """Limit ichida bo'lsa 0, aks holda kutish sekundlari."""
-    async with _chat_locks[chat_id]:
-        now = time.monotonic()
-        _purge(chat_id, now)
-        times = _chat_times[chat_id]
-        if len(times) < _LIMIT:
-            times.append(now)
-            return 0.0
-        wait = _WINDOW - (now - times[0]) + 0.05
-        await asyncio.sleep(wait)
-        now2 = time.monotonic()
-        _purge(chat_id, now2)
-        times.append(now2)
-        return wait
+    """Umumiy per-group limit (reklama bilan birga)."""
+    from bot.services.chat_rate_limit import wait_chat_slot
+
+    return await wait_chat_slot(chat_id)
 
 
 def payload_from_session(sess: AutoPostSession) -> RawPayload:

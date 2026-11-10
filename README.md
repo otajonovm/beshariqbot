@@ -163,8 +163,17 @@ Deploy oldidan DB zaxira nusxasi oling (yuqoridagi bo'lim).
 | `PAYMENT_START_DAYS` | Mavjud haydovchilar uchun birinchi muddat. Standart: `7` |
 | `PAYMENTS_ENABLED` | To'lov tizimi boshlang'ich. Standart: `true` |
 | `ADMIN_CONTACT` | Blok/to'lov xabaridagi kontakt |
-| `AD_INTERVAL_HOURS` | Reklama interval default |
+| `AD_INTERVAL_HOURS` | Reklama interval default (soat). Panelda 30 s…3 soat |
 | `AD_ACTIVE_FROM` / `AD_ACTIVE_TO` | Reklama faol vaqti |
+
+### Reklama (`/admin` → 📣 Reklama)
+
+- **Interval:** 30 s, 1/2/5/10/30 min, 1/2/3 soat (`ad_interval_sec`). Eski soatli qiymat avtomatik soniyaga o‘tadi.
+- **Davomiylik:** Doimiy (faol soatlarda) yoki 1/2/3 soat — tugasa o‘zi to‘xtaydi, adminga xabar.
+- **Dizayn:** banner (`assets/ad_banner.jpg` yoki admin yuklagan) + HTML caption + «🚕 Taksi buyurtma berish» (`?start=order`). Ixtiyoriy «📞 Dispetcher».
+- Har guruhda `next_run_at`, guruhlar orasida 1–2 s jitter. Eski reklama xabari o‘chiriladi. Avto-e'lon bilan umumiy **20/min/guruh** limit.
+- Faqat «Bot reklamasi» flagi yoqilgan guruhlar; **426 Global** alohida yoqiladi.
+- Statistika: reklamadan bosishlar + `source=ad` buyurtmalar.
 
 ### Super-admin funksiyalar (`/admin` → ⭐ Premium)
 

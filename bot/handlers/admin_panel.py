@@ -25,6 +25,7 @@ from bot.database.db_requests import (
 from bot.database.models import Driver, DriverStatus, utcnow
 from bot.keyboards.default_kb import BTN_CANCEL, driver_panel_kb, main_menu_kb
 from bot.keyboards.inline_kb import (
+    admin_ad_duration_kb,
     admin_ad_interval_kb,
     admin_ads_menu_kb,
     admin_confirm_delete_kb,
@@ -40,7 +41,15 @@ from bot.keyboards.inline_kb import (
     admin_stats_kb,
 )
 from bot.services import app_settings
-from bot.services.bot_ads import preview_text, send_ad_to_groups
+from bot.services.bot_ads import (
+    ad_stats,
+    caption_ok,
+    list_ad_groups,
+    schedule_groups,
+    send_ad_to_groups,
+    send_preview_to_admin,
+    status_summary_text,
+)
 from bot.services.bot_groups import (
     list_groups,
     refresh_group_meta,
@@ -886,30 +895,51 @@ async def adm_grp_no(callback: CallbackQuery, session: AsyncSession) -> None:
 # ----- Reklama -----
 
 
-@router.callback_query(F.data == "adm:ad:menu")
-async def adm_ad_menu(callback: CallbackQuery) -> None:
+async def _show_ad_menu(callback: CallbackQuery, session: AsyncSession) -> None:
+    groups = await list_ad_groups(session)
     cfg = app_settings.ad_config()
-    text = (
-        f"📣 <b>Reklama</b>\n\n"
-        f"{'✅ Yoqilgan' if cfg['enabled'] else '❌ O‘chiq'}\n"
-        f"Interval: har {cfg['interval_hours']} soat\n"
-        f"Vaqt: {cfg['active_from']}–{cfg['active_to']}\n\n"
-        f"<i>{cfg['text'][:200]}</i>"
-    )
+    text = status_summary_text(group_count=len(groups))
     await _edit_or_answer(
         callback,
         text,
-        admin_ads_menu_kb(enabled=cfg["enabled"], interval=cfg["interval_hours"]),
+        admin_ads_menu_kb(
+            enabled=cfg["enabled"],
+            interval_label=app_settings.format_interval_human(cfg["interval_sec"]),
+            duration_label=app_settings.format_duration_human(cfg["duration_sec"]),
+        ),
     )
+
+
+@router.callback_query(F.data == "adm:ad:menu")
+async def adm_ad_menu(callback: CallbackQuery, session: AsyncSession) -> None:
+    await _show_ad_menu(callback, session)
     await callback.answer()
 
 
 @router.callback_query(F.data == "adm:ad:toggle")
 async def adm_ad_toggle(callback: CallbackQuery, session: AsyncSession) -> None:
     cfg = app_settings.ad_config()
-    await app_settings.set_setting(session, "ad_enabled", not cfg["enabled"])
+    turning_on = not cfg["enabled"]
+    await app_settings.set_setting(session, "ad_enabled", turning_on)
+    if turning_on:
+        dur = int(cfg["duration_sec"] or 0)
+        if dur > 0:
+            ends = datetime.now(TZ) + timedelta(seconds=dur)
+            await app_settings.set_setting(session, "ad_ends_at", ends.isoformat())
+        else:
+            await app_settings.set_setting(session, "ad_ends_at", "")
+        await schedule_groups(session, from_now=True, stagger=True)
+    else:
+        await app_settings.set_setting(session, "ad_ends_at", "")
+    await log_admin_action(
+        session,
+        admin_id=callback.from_user.id,
+        action="ad_toggle",
+        detail=str(turning_on),
+    )
     await session.commit()
-    await adm_ad_menu(callback)
+    await _show_ad_menu(callback, session)
+    await callback.answer("Yoqildi" if turning_on else "To'xtatildi")
 
 
 @router.callback_query(F.data == "adm:ad:interval")
@@ -918,18 +948,57 @@ async def adm_ad_interval(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("adm:ad:intsec:"))
+async def adm_ad_intsec(callback: CallbackQuery, session: AsyncSession) -> None:
+    sec = int((callback.data or "").rsplit(":", 1)[-1])
+    await app_settings.set_setting(session, "ad_interval_sec", sec)
+    # Legacy maydonni ham yangilash
+    await app_settings.set_setting(session, "ad_interval_hours", max(1, sec // 3600))
+    await schedule_groups(session, from_now=True, stagger=True)
+    await session.commit()
+    await _show_ad_menu(callback, session)
+    await callback.answer("Saqlandi.")
+
+
+# Eski callback (soat)
 @router.callback_query(F.data.startswith("adm:ad:inth:"))
-async def adm_ad_inth(callback: CallbackQuery, session: AsyncSession) -> None:
+async def adm_ad_inth_legacy(callback: CallbackQuery, session: AsyncSession) -> None:
     hours = int((callback.data or "").rsplit(":", 1)[-1])
+    await app_settings.set_setting(session, "ad_interval_sec", hours * 3600)
     await app_settings.set_setting(session, "ad_interval_hours", hours)
     await session.commit()
-    await adm_ad_menu(callback)
+    await _show_ad_menu(callback, session)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:ad:duration")
+async def adm_ad_duration(callback: CallbackQuery) -> None:
+    await _edit_or_answer(callback, "Davomiylikni tanlang:", admin_ad_duration_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:ad:dur:"))
+async def adm_ad_dur(callback: CallbackQuery, session: AsyncSession) -> None:
+    sec = int((callback.data or "").rsplit(":", 1)[-1])
+    await app_settings.set_setting(session, "ad_duration_sec", sec)
+    cfg = app_settings.ad_config()
+    if cfg["enabled"] and sec > 0:
+        ends = datetime.now(TZ) + timedelta(seconds=sec)
+        await app_settings.set_setting(session, "ad_ends_at", ends.isoformat())
+    elif sec <= 0:
+        await app_settings.set_setting(session, "ad_ends_at", "")
+    await session.commit()
+    await _show_ad_menu(callback, session)
+    await callback.answer("Saqlandi.")
 
 
 @router.callback_query(F.data == "adm:ad:text")
 async def adm_ad_text(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminAdEdit.text)
-    await callback.message.answer("Yangi reklama matnini yuboring:")
+    await callback.message.answer(
+        "Yangi caption yuboring (HTML mumkin).\n"
+        f"Maksimal {1024} belgi."
+    )
     await callback.answer()
 
 
@@ -939,16 +1008,23 @@ async def adm_ad_text_save(message: Message, state: FSMContext, session: AsyncSe
     if len(text) < 3:
         await message.answer("Matn juda qisqa.")
         return
-    await app_settings.set_setting(session, "ad_text", text[:1000])
+    ok, msg = caption_ok(text)
+    if not ok:
+        await message.answer(f"⚠️ {msg}")
+        return
+    await app_settings.set_setting(session, "ad_text", text)
     await session.commit()
     await state.clear()
-    await message.answer("✅ Matn saqlandi.", reply_markup=admin_menu_kb())
+    await message.answer("✅ Matn saqlandi.")
 
 
 @router.callback_query(F.data == "adm:ad:photo")
 async def adm_ad_photo(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminAdEdit.photo)
-    await callback.message.answer("Reklama rasmini yuboring yoki «o'chirish» deb yozing.")
+    await callback.message.answer(
+        "🖼 Banner rasmini yuboring.\n"
+        "Olib tashlash: «o'chirish» (default assets/ad_banner.jpg ishlatiladi)."
+    )
     await callback.answer()
 
 
@@ -958,7 +1034,7 @@ async def adm_ad_photo_save(message: Message, state: FSMContext, session: AsyncS
     await app_settings.set_setting(session, "ad_photo_file_id", file_id)
     await session.commit()
     await state.clear()
-    await message.answer("✅ Rasm saqlandi.")
+    await message.answer("✅ Banner saqlandi.")
 
 
 @router.message(AdminAdEdit.photo, F.text)
@@ -967,9 +1043,77 @@ async def adm_ad_photo_clear(message: Message, state: FSMContext, session: Async
         await app_settings.set_setting(session, "ad_photo_file_id", "")
         await session.commit()
         await state.clear()
-        await message.answer("Rasm olib tashlandi.")
+        await message.answer("Banner olib tashlandi (default ishlatiladi).")
         return
     await message.answer("Rasm yuboring yoki «o'chirish» yozing.")
+
+
+@router.callback_query(F.data == "adm:ad:btn")
+async def adm_ad_btn(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminAdEdit.button)
+    await callback.message.answer("Tugma matnini yozing (masalan: 🚕 Taksi buyurtma berish):")
+    await callback.answer()
+
+
+@router.message(AdminAdEdit.button, F.text)
+async def adm_ad_btn_save(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    text = (message.text or "").strip()
+    if len(text) < 2 or len(text) > 64:
+        await message.answer("Tugma 2–64 belgi orasida bo'lsin.")
+        return
+    await app_settings.set_setting(session, "ad_button_text", text)
+    await session.commit()
+    await state.clear()
+    await message.answer("✅ Tugma matni saqlandi.")
+
+
+@router.callback_query(F.data == "adm:ad:phone")
+async def adm_ad_phone(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminAdEdit.phone)
+    await callback.message.answer(
+        "Dispetcher telefonini yozing (+998...).\n"
+        "O'chirish: «o'chirish»"
+    )
+    await callback.answer()
+
+
+@router.message(AdminAdEdit.phone, F.text)
+async def adm_ad_phone_save(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    raw = (message.text or "").strip()
+    if "ochir" in raw.lower().replace("'", ""):
+        await app_settings.set_setting(session, "ad_dispatcher_phone", "")
+        await session.commit()
+        await state.clear()
+        await message.answer("Dispetcher tugmasi o'chirildi.")
+        return
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) < 9:
+        await message.answer("Telefon noto'g'ri.")
+        return
+    await app_settings.set_setting(session, "ad_dispatcher_phone", raw)
+    await session.commit()
+    await state.clear()
+    await message.answer("✅ Dispetcher raqami saqlandi.")
+
+
+@router.callback_query(F.data == "adm:ad:main")
+async def adm_ad_main(callback: CallbackQuery, session: AsyncSession) -> None:
+    cfg = app_settings.ad_config()
+    new_val = not cfg["main_group_enabled"]
+    await app_settings.set_setting(session, "ad_main_group_enabled", new_val)
+    await session.commit()
+    await _show_ad_menu(callback, session)
+    await callback.answer("426 Global: " + ("yoqildi" if new_val else "o'chirildi"))
+
+
+@router.callback_query(F.data == "adm:ad:reset")
+async def adm_ad_reset(callback: CallbackQuery, session: AsyncSession) -> None:
+    await app_settings.set_setting(session, "ad_text", app_settings.DEFAULT_AD_CAPTION)
+    await app_settings.set_setting(session, "ad_button_text", app_settings.DEFAULT_AD_BUTTON)
+    await app_settings.set_setting(session, "ad_photo_file_id", "")
+    await session.commit()
+    await _show_ad_menu(callback, session)
+    await callback.answer("Default dizayn qaytarildi.")
 
 
 @router.callback_query(F.data == "adm:ad:window")
@@ -997,36 +1141,23 @@ async def adm_ad_window_save(message: Message, state: FSMContext, session: Async
 
 @router.callback_query(F.data == "adm:ad:preview")
 async def adm_ad_preview(callback: CallbackQuery) -> None:
-    from bot.services.bot_ads import ad_keyboard
-
-    cfg = app_settings.ad_config()
-    text = await preview_text()
+    uid = callback.from_user.id if callback.from_user else 0
     try:
-        if cfg["photo_file_id"]:
-            await callback.message.answer_photo(
-                cfg["photo_file_id"],
-                caption=cfg["text"][:1024],
-                reply_markup=ad_keyboard(),
-            )
-        else:
-            await callback.message.answer(cfg["text"], reply_markup=ad_keyboard())
-        await callback.message.answer(text)
-    except TelegramBadRequest:
-        await callback.message.answer(text)
-    await callback.answer()
+        await send_preview_to_admin(callback.bot, uid)
+        await callback.answer("Oldindan ko'rish yuborildi.")
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        await callback.answer(f"Xato: {exc}", show_alert=True)
 
 
 @router.callback_query(F.data == "adm:ad:now")
 async def adm_ad_now(callback: CallbackQuery, session: AsyncSession) -> None:
+    await callback.answer("Yuborilmoqda…")
     ok, fail = await send_ad_to_groups(callback.bot, session, force=True)
-    await app_settings.set_setting(
-        session, "ad_last_sent_at", datetime.now(TZ).isoformat()
-    )
     await log_admin_action(
         session, admin_id=callback.from_user.id, action="ad_send_now", detail=f"{ok}/{fail}"
     )
     await session.commit()
-    await callback.answer(f"Yuborildi: {ok}, xato: {fail}", show_alert=True)
+    await callback.message.answer(f"🚀 Yuborildi: <b>{ok}</b>, xato: <b>{fail}</b>")
 
 
 # ----- Statistika -----
@@ -1046,6 +1177,7 @@ async def adm_stats_menu(callback: CallbackQuery) -> None:
 async def adm_stats_period(callback: CallbackQuery, session: AsyncSession) -> None:
     days = int((callback.data or "").rsplit(":", 1)[-1])
     st = await get_admin_period_stats(session, days=days)
+    clicks, ad_orders = await ad_stats(session, days=days)
     label = "Bugun" if days <= 1 else f"{days} kun"
     text = (
         f"📊 <b>Statistika — {label}</b>\n\n"
@@ -1056,7 +1188,7 @@ async def adm_stats_period(callback: CallbackQuery, session: AsyncSession) -> No
         f"💳 To'lov kutilmoqda: <b>{st.payment_due}</b>\n"
         f"🚕 Yo'lovchi so'rovlari: <b>{st.passenger_orders}</b>\n"
         f"🚖 Tasdiqlangan safarlar: <b>{st.driver_announces}</b>\n"
-        f"📣 Reklama orqali: <b>{st.ad_customers}</b>"
+        f"📣 Reklamadan: <b>{clicks}</b> bosish, <b>{ad_orders}</b> buyurtma"
     )
     await _edit_or_answer(callback, text, admin_stats_kb())
     await callback.answer()

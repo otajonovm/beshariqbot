@@ -475,38 +475,96 @@ def admin_group_approve_kb(chat_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def admin_ads_menu_kb(*, enabled: bool, interval: int) -> InlineKeyboardMarkup:
+def admin_ads_menu_kb(
+    *,
+    enabled: bool,
+    interval_label: str = "",
+    duration_label: str = "",
+) -> InlineKeyboardMarkup:
+    toggle = "⏸ To'xtatish" if enabled else "▶️ Yoqish"
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text=toggle, callback_data="adm:ad:toggle")],
             [
                 InlineKeyboardButton(
-                    text=("✅ Reklama yoqilgan" if enabled else "❌ Reklama o'chiq"),
-                    callback_data="adm:ad:toggle",
-                )
-            ],
-            [InlineKeyboardButton(text="✍️ Matnni o'zgartirish", callback_data="adm:ad:text")],
-            [InlineKeyboardButton(text="🖼 Rasm (ixtiyoriy)", callback_data="adm:ad:photo")],
-            [InlineKeyboardButton(text="👁 Oldindan ko'rish", callback_data="adm:ad:preview")],
-            [
-                InlineKeyboardButton(
-                    text=f"⏱ Interval: {interval} soat",
+                    text=f"⏱ Interval: {interval_label or '—'}",
                     callback_data="adm:ad:interval",
                 )
             ],
-            [InlineKeyboardButton(text="🕐 Faol vaqt", callback_data="adm:ad:window")],
-            [InlineKeyboardButton(text="📤 Hozir yuborish", callback_data="adm:ad:now")],
+            [
+                InlineKeyboardButton(
+                    text=f"⌛ Davomiylik: {duration_label or '—'}",
+                    callback_data="adm:ad:duration",
+                )
+            ],
+            [InlineKeyboardButton(text="🕘 Faol soatlar", callback_data="adm:ad:window")],
+            [
+                InlineKeyboardButton(
+                    text="🖼 Banner rasmini o'zgartirish",
+                    callback_data="adm:ad:photo",
+                )
+            ],
+            [InlineKeyboardButton(text="✏️ Matnni o'zgartirish", callback_data="adm:ad:text")],
+            [InlineKeyboardButton(text="🔘 Tugma matni", callback_data="adm:ad:btn")],
+            [
+                InlineKeyboardButton(
+                    text="📞 Dispetcher raqami",
+                    callback_data="adm:ad:phone",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏢 426 Global reklama",
+                    callback_data="adm:ad:main",
+                )
+            ],
+            [InlineKeyboardButton(text="👁 Ko'rish", callback_data="adm:ad:preview")],
+            [
+                InlineKeyboardButton(
+                    text="♻️ Default dizaynga qaytarish",
+                    callback_data="adm:ad:reset",
+                )
+            ],
+            [InlineKeyboardButton(text="🚀 Hozir yuborish", callback_data="adm:ad:now")],
             admin_nav_row(back="adm:home"),
         ]
     )
 
 
 def admin_ad_interval_kb() -> InlineKeyboardMarkup:
+    from bot.services.app_settings import AD_INTERVAL_CHOICES, format_interval_human
+
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for sec in AD_INTERVAL_CHOICES:
+        row.append(
+            InlineKeyboardButton(
+                text=format_interval_human(sec),
+                callback_data=f"adm:ad:intsec:{sec}",
+            )
+        )
+        if len(row) >= 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append(admin_nav_row(back="adm:ad:menu"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_ad_duration_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="1 soat", callback_data="adm:ad:inth:1"),
-                InlineKeyboardButton(text="2 soat", callback_data="adm:ad:inth:2"),
-                InlineKeyboardButton(text="3 soat", callback_data="adm:ad:inth:3"),
+                InlineKeyboardButton(
+                    text="Doimiy (faol soatlarda)",
+                    callback_data="adm:ad:dur:0",
+                )
+            ],
+            [
+                InlineKeyboardButton(text="1 soat", callback_data="adm:ad:dur:3600"),
+                InlineKeyboardButton(text="2 soat", callback_data="adm:ad:dur:7200"),
+                InlineKeyboardButton(text="3 soat", callback_data="adm:ad:dur:10800"),
             ],
             admin_nav_row(back="adm:ad:menu"),
         ]

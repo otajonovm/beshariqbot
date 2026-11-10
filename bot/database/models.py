@@ -524,8 +524,45 @@ class BotGroup(Base):
     # Admin "Yoqasizmi?" tasdig'i
     approved: Mapped[bool] = mapped_column(Boolean, default=True)
     last_ad_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ad_next_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # 429 dan keyin interval vaqtincha 2x
+    ad_boost_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ad_permission_warned: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class AdSendLog(Base):
+    """Reklama yuborish tarixi."""
+
+    __tablename__ = "ad_send_logs"
+    __table_args__ = (Index("ix_ad_send_sent_at", "sent_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
+    )
+
+
+class AdClick(Base):
+    """start=order bosilishi (reklama deep link)."""
+
+    __tablename__ = "ad_clicks"
+    __table_args__ = (Index("ix_ad_clicks_created", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
     )
 
 
@@ -774,6 +811,22 @@ async def init_db() -> None:
                 sync_conn.execute(text(f"ALTER TABLE orders ADD COLUMN claimed_at {col_type}"))
             if "source" not in order_cols:
                 sync_conn.execute(text("ALTER TABLE orders ADD COLUMN source VARCHAR(32)"))
+
+            # bot_groups: reklama next_run / boost (jadval create_all bilan paydo bo'lishi mumkin)
+            tables = set(inspect(sync_conn).get_table_names())
+            if "bot_groups" in tables:
+                gcols = {col["name"] for col in inspect(sync_conn).get_columns("bot_groups")}
+                bool_def = "FALSE" if dialect == "postgresql" else "0"
+                for col_name, col_type in (
+                    ("ad_next_run_at", ts_type),
+                    ("ad_boost_until", ts_type),
+                    ("ad_permission_warned", f"BOOLEAN DEFAULT {bool_def}"),
+                    ("last_ad_message_id", "INTEGER"),
+                ):
+                    if col_name not in gcols:
+                        sync_conn.execute(
+                            text(f"ALTER TABLE bot_groups ADD COLUMN {col_name} {col_type}")
+                        )
 
             # Eski SQLite: orders.driver_id → drivers FK ni olib tashlash
             if dialect != "sqlite":

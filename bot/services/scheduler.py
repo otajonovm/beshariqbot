@@ -281,11 +281,11 @@ def setup_scheduler(bot: Bot, session_maker: async_sessionmaker) -> AsyncIOSched
         max_instances=1,
         coalesce=True,
     )
-    # 1d. Bot reklama (har daqiqada tekshiruv; interval soat bilan)
+    # 1d. Bot reklama (5s — 30s interval uchun; per-group next_run_at)
     scheduler.add_job(
         check_bot_ads,
         trigger="interval",
-        minutes=1,
+        seconds=5,
         args=[bot, session_maker],
         id="bot_ads_check",
         replace_existing=True,

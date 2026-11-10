@@ -210,6 +210,10 @@ async def cmd_start(
 
     # Reklama deep link: t.me/bot?start=order
     if payload == "order" or payload.startswith("order"):
+        from bot.services.bot_ads import record_ad_click
+
+        await record_ad_click(session, user.id)
+        await session.commit()
         await state.update_data(order_source="ad")
         await message.answer(
             "🚕 <b>Taksi chaqirish</b>\n\nYo'nalishni tanlang:",
