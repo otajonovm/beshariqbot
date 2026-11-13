@@ -471,7 +471,7 @@ class Order(Base):
             f"📞 <b>Telefon:</b> <code>{self.phone}</code>"
             f"{passenger_line}\n\n"
             f"⚠️ <b>Diqqat:</b> Mijoz bilan bog'lanib, <b>3 daqiqa</b> ichida pastdagi "
-            f"<b>«✅ Ha, oldim»</b> tugmasini bosing!\n"
+            f"<b>«🟢 Ha, oldim»</b> tugmasini bosing!\n"
             f"Aks holda buyurtma avtomatik tarzda bekor qilinib, qaytadan guruhga tashlanadi."
         )
 

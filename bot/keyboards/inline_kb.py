@@ -72,14 +72,16 @@ def deal_kb(order_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Ha, oldim",
+                    text="🟢 Ha, oldim",
                     callback_data=f"deal_ok:{order_id}",
+                    style="success",
                 )
             ],
             [
                 InlineKeyboardButton(
                     text="❌ Yo'q, kelisha olmadik",
                     callback_data=f"deal_cancel:{order_id}",
+                    style="danger",
                 )
             ],
         ]

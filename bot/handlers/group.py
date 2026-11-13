@@ -80,7 +80,25 @@ async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
                 approved=True,
                 chat_type=chat_type,
             )
+            # Admin bo'lsa — barcha guruh huquqlari / flaglar ochilsin
+            is_admin = event.new_chat_member.status in {"administrator", "creator"}
+            is_ch = chat_type == "channel"
+            from bot.services import app_settings as _apps
+
+            is_main = event.chat.id == _apps.resolved_main_group_id() and not is_ch
             g.flag_bot_ads = True
+            if is_admin and not is_ch:
+                g.flag_relay_source = not is_main
+                g.flag_driver_posts = not is_main
+                g.flag_auto_posts = not is_main
+                g.flag_delete_original = (
+                    event.chat.id in settings.resolved_sweep_group_ids
+                )
+            elif is_admin and is_ch:
+                g.flag_relay_source = False
+                g.flag_driver_posts = False
+                g.flag_auto_posts = False
+                g.flag_delete_original = False
             await refresh_group_meta(event.bot, session, event.chat.id)
             await session.commit()
     except Exception:
@@ -93,7 +111,7 @@ async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
         f"Yangi {kind}: <b>{title}</b>. Yoqasizmi?\n"
         f"ID: <code>{event.chat.id}</code>\n"
         f"{'✅ Sozlamada bor' if known else '⚠️ Hali ro‘yxatda yo‘q'}\n"
-        f"📣 Reklama: default yoqilgan",
+        f"📣 Reklama + guruh flaglari: yoqilgan",
         reply_markup=admin_group_approve_kb(event.chat.id),
     )
 
@@ -237,11 +255,21 @@ async def process_claim(
     passenger = order.passenger
     private_text = order.to_driver_private_text(passenger)
     try:
+        kb = deal_kb(order.id)
         sent_msg = await bot.send_message(
             chat_id=user.id,
             text=private_text,
-            reply_markup=deal_kb(order.id),
+            reply_markup=kb,
         )
+        if sent_msg.reply_markup is None:
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=user.id,
+                    message_id=sent_msg.message_id,
+                    reply_markup=kb,
+                )
+            except TelegramBadRequest:
+                logger.warning("deal_kb qayta qo'yilmadi order=%s", order.id)
         await set_order_claim_message(session, order.id, sent_msg.message_id)
     except TelegramForbiddenError:
         await release_claim(session, order.id, user.id)

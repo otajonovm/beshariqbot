@@ -186,7 +186,7 @@ Global o'chiq → hech kimda ishlamaydi. Global yoqiq → haydovchi shaxsiy sozl
 | `driver_wizard` | 📢 E'lon berish |
 | `driver_raw_post` | lichkaga tashlash + 🔁 takrorlash |
 | `multi_group` | 👥 ko'p guruhga chiqarish |
-| `passenger_dm` | 🚕 yo'lovchi so'rovi lichkaga |
+| `passenger_dm` | 🚕 yo'lovchi so'rovi lichkaga (default **o'chiq** — faqat asosiy guruh) |
 | `driver_profile_edit` | 👤 Profilim |
 | `driver_photo_edit` | ✏️ Rasm (profil) |
 | `driver_ask_time` | 🕐 vaqt so'rovi |

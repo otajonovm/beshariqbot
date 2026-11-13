@@ -43,12 +43,14 @@ PHONE_RE = re.compile(r"^\+?\d{9,15}$")
 
 
 async def _notify_passenger_dm_drivers(bot, session: AsyncSession, order) -> None:
-    """Premium: yo'lovchi so'rovi lichkaga — hot path emas (buyurtma yaratilgach)."""
+    """Yo'lovchi so'rovi lichkaga — default o'chiq; faqat asosiy guruhga chiqadi."""
     from sqlalchemy import select
 
     from bot.database.models import Driver
-    from bot.services.feature_flags import driver_feature_enabled
+    from bot.services.feature_flags import driver_feature_enabled, is_enabled
 
+    if not is_enabled("passenger_dm"):
+        return
     try:
         drivers = list((await session.execute(select(Driver))).scalars().all())
     except Exception:

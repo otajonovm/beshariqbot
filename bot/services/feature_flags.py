@@ -27,16 +27,23 @@ class FlagMeta:
     title: str
     hides: str  # qisqa: qaysi tugma/yashirinadi
     premium: bool = False
+    default_on: bool = True
 
 
-# Default: hammasi yoqilgan
+# Default: ko'pchilik yoqilgan; passenger_dm o'chiq (faqat asosiy guruh)
 FLAG_DEFS: tuple[FlagMeta, ...] = (
     FlagMeta("driver_auto_post", "Avto-e'lon", "⏰ Avto-e'lon", premium=True),
     FlagMeta("photo_announce", "Rasmli e'lon", "🖼 e'lon rasmi", premium=True),
     FlagMeta("driver_wizard", "E'lon wizard", "📢 E'lon berish"),
     FlagMeta("driver_raw_post", "Oxirgi e'lonni takrorlash", "🔁 takrorlash + lichka", premium=True),
     FlagMeta("multi_group", "Ko'p guruhga chiqarish", "👥 bir nechta guruh", premium=True),
-    FlagMeta("passenger_dm", "So'rovlar lichkaga", "🚕 yo'lovchi so'rovi DM", premium=True),
+    FlagMeta(
+        "passenger_dm",
+        "So'rovlar lichkaga",
+        "🚕 yo'lovchi so'rovi DM",
+        premium=True,
+        default_on=False,
+    ),
     FlagMeta("driver_profile_edit", "Profil tahrir", "👤 Profilim"),
     FlagMeta("driver_photo_edit", "Rasm tahrir", "✏️ Rasm / 🖼 Rasmlar"),
     FlagMeta("driver_ask_time", "Ketish vaqtini so'rash", "🕐 vaqt tanlash"),
@@ -50,19 +57,24 @@ FLAG_BY_KEY: dict[str, FlagMeta] = {f.key: f for f in FLAG_DEFS}
 PREMIUM_KEYS: tuple[str, ...] = tuple(f.key for f in FLAG_DEFS if f.premium)
 
 _DEFAULT_ON = True
-_cache: dict[str, bool] = {k: _DEFAULT_ON for k in FLAG_KEYS}
+_FLAG_DEFAULTS: dict[str, bool] = {f.key: f.default_on for f in FLAG_DEFS}
+_cache: dict[str, bool] = dict(_FLAG_DEFAULTS)
 _loaded = False
+
+
+def _default_for(key: str) -> bool:
+    return bool(_FLAG_DEFAULTS.get(key, _DEFAULT_ON))
 
 
 def is_enabled(key: str) -> bool:
     """Sinxron o'qish (kesh). Noma'lum kalit → True."""
     if key not in FLAG_KEYS:
         return True
-    return bool(_cache.get(key, _DEFAULT_ON))
+    return bool(_cache.get(key, _default_for(key)))
 
 
 def snapshot() -> dict[str, bool]:
-    return {k: bool(_cache.get(k, _DEFAULT_ON)) for k in FLAG_KEYS}
+    return {k: bool(_cache.get(k, _default_for(k))) for k in FLAG_KEYS}
 
 
 def apply_snapshot(values: dict[str, bool]) -> None:
@@ -71,7 +83,7 @@ def apply_snapshot(values: dict[str, bool]) -> None:
         if k in values:
             _cache[k] = bool(values[k])
         else:
-            _cache.setdefault(k, _DEFAULT_ON)
+            _cache.setdefault(k, _default_for(k))
     _loaded = True
 
 
@@ -205,7 +217,18 @@ async def ensure_defaults(session: AsyncSession) -> None:
     }
     for meta in FLAG_DEFS:
         if meta.key not in existing:
-            session.add(FeatureFlag(key=meta.key, enabled=True))
+            session.add(FeatureFlag(key=meta.key, enabled=meta.default_on))
+    # Bir martalik: yo'lovchi so'rovi lichkaga o'chirilsin (faqat asosiy guruh)
+    from bot.services import app_settings
+
+    if not app_settings.get_cached("passenger_dm_off_v1"):
+        row = existing.get("passenger_dm") or await session.get(FeatureFlag, "passenger_dm")
+        if row is not None:
+            row.enabled = False
+            row.updated_at = utcnow()
+        else:
+            session.add(FeatureFlag(key="passenger_dm", enabled=False))
+        await app_settings.set_setting(session, "passenger_dm_off_v1", True)
     await session.flush()
 
 
@@ -214,7 +237,7 @@ async def load_flags(session: AsyncSession) -> dict[str, bool]:
     rows = (
         await session.execute(select(FeatureFlag).where(FeatureFlag.key.in_(FLAG_KEYS)))
     ).scalars().all()
-    values = {k: _DEFAULT_ON for k in FLAG_KEYS}
+    values = {k: _default_for(k) for k in FLAG_KEYS}
     for row in rows:
         values[row.key] = bool(row.enabled)
     apply_snapshot(values)
@@ -248,8 +271,8 @@ async def bootstrap_flags(session_maker: async_sessionmaker) -> None:
             await session.commit()
         logger.info("Feature flags loaded: %s", snapshot())
     except Exception:
-        logger.exception("Feature flags yuklanmadi — default ON")
-        apply_snapshot({k: True for k in FLAG_KEYS})
+        logger.exception("Feature flags yuklanmadi — defaultlar")
+        apply_snapshot(dict(_FLAG_DEFAULTS))
 
 
 def flags_status_lines(values: dict[str, bool] | None = None) -> str:
