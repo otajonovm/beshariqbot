@@ -68,6 +68,9 @@ AD_INTERVAL_CHOICES: tuple[int, ...] = (
 # Davomiylik: 0 = doimiy
 AD_DURATION_CHOICES: tuple[int, ...] = (0, 3600, 7200, 10800)
 
+# Eski daqiqa kalitlari (qiymat daqiqada). ad_interval_sec ga × 60.
+LEGACY_MINUTE_KEYS: tuple[str, ...] = ("ad_interval_minutes", "ad_interval_min")
+
 _cache: dict[str, Any] = {}
 _loaded = False
 
@@ -118,26 +121,35 @@ def resolved_main_group_id() -> int:
     return int(cached)
 
 
-def resolve_ad_interval_sec() -> int:
-    """Soniyada. Eski soatli qiymat bo'lsa — o'tkazadi."""
-    raw_sec = get_cached("ad_interval_sec")
-    if raw_sec is not None and raw_sec != "":
-        try:
-            sec = int(raw_sec)
-            if sec > 0:
-                # Agar kimdir daqiqa saqlagan bo'lsa (1..180) — soniyaga
-                if sec <= 180 and sec not in AD_INTERVAL_CHOICES and sec < 30:
-                    sec = sec * 60
-                return max(30, sec)
-        except (TypeError, ValueError):
-            pass
-    hours = get_cached("ad_interval_hours")
+def _positive_int(raw: Any) -> int | None:
+    if raw is None or raw == "":
+        return None
     try:
-        h = int(hours or 0)
+        value = int(raw)
     except (TypeError, ValueError):
-        h = 0
-    if h > 0:
-        return max(30, h * 3600)
+        return None
+    return value if value > 0 else None
+
+
+def resolve_ad_interval_sec() -> int:
+    """Soniyada.
+
+    Tartib: ad_interval_sec → eski daqiqa kaliti (× 60) → eski soat (× 3600).
+    30 dan kichik va tanlovda yo'q soniya qiymati daqiqa deb olinadi.
+    """
+    raw_sec = _positive_int(get_cached("ad_interval_sec"))
+    if raw_sec is not None:
+        sec = raw_sec
+        if sec < 30 and sec not in AD_INTERVAL_CHOICES:
+            sec = sec * 60
+        return max(30, sec)
+    for key in LEGACY_MINUTE_KEYS:
+        minutes = _positive_int(get_cached(key))
+        if minutes is not None:
+            return max(30, minutes * 60)
+    hours = _positive_int(get_cached("ad_interval_hours"))
+    if hours is not None:
+        return max(30, hours * 3600)
     return 7200
 
 
@@ -189,14 +201,31 @@ async def ensure_defaults(session: AsyncSession) -> None:
         row.key: row
         for row in (await session.execute(select(AppSetting))).scalars().all()
     }
-    # Legacy soat → soniya migratsiya (bir marta)
-    if "ad_interval_sec" not in existing and "ad_interval_hours" in existing:
-        try:
-            hours = int(_deserialize(existing["ad_interval_hours"].value) or 2)
-        except (TypeError, ValueError):
-            hours = 2
-        session.add(AppSetting(key="ad_interval_sec", value=_serialize(max(30, hours * 3600))))
-        existing["ad_interval_sec"] = True  # type: ignore[assignment]
+    # Legacy daqiqa yoki soat → soniya (bir marta, ad_interval_sec yo'q bo'lsa).
+    # Qayta ishga tushirish mavjud soniya qiymatini ustidan yozmaydi.
+    if "ad_interval_sec" not in existing:
+        migrated: int | None = None
+        for key in LEGACY_MINUTE_KEYS:
+            row = existing.get(key)
+            if row is None or row is True:
+                continue
+            minutes = _positive_int(_deserialize(row.value))
+            if minutes is not None:
+                migrated = max(30, minutes * 60)
+                logger.info(
+                    "Reklama intervali: %s=%s daqiqa → %s soniya",
+                    key,
+                    minutes,
+                    migrated,
+                )
+                break
+        if migrated is None and "ad_interval_hours" in existing:
+            hours = _positive_int(_deserialize(existing["ad_interval_hours"].value)) or 2
+            migrated = max(30, hours * 3600)
+            logger.info("Reklama intervali: %s soat → %s soniya", hours, migrated)
+        if migrated is not None:
+            session.add(AppSetting(key="ad_interval_sec", value=_serialize(migrated)))
+            existing["ad_interval_sec"] = True  # type: ignore[assignment]
 
     for key, default in SETTING_DEFAULTS.items():
         if key not in existing:
