@@ -99,6 +99,28 @@ async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
                 g.flag_driver_posts = False
                 g.flag_auto_posts = False
                 g.flag_delete_original = False
+            # #region agent log
+            try:
+                from bot.debug_agent import agent_log
+
+                agent_log(
+                    "H6",
+                    "group.py:on_bot_chat_member",
+                    "flags_after_admin",
+                    {
+                        "chat_id": event.chat.id,
+                        "chat_type": chat_type,
+                        "is_admin": is_admin,
+                        "is_main": is_main,
+                        "ads": g.flag_bot_ads,
+                        "relay": g.flag_relay_source,
+                        "driver": g.flag_driver_posts,
+                        "auto": g.flag_auto_posts,
+                    },
+                )
+            except Exception:
+                pass
+            # #endregion
             await refresh_group_meta(event.bot, session, event.chat.id)
             await session.commit()
     except Exception:
@@ -157,14 +179,42 @@ async def _send_card(
 
 
 async def publish_order_to_group(bot: Bot, session: AsyncSession, order: Order) -> bool:
+    from bot.debug_agent import agent_log
+
     text = order.to_group_text()
     markup = claim_kb(order.id)
+    targets = _order_group_ids()
+    # #region agent log
+    agent_log(
+        "H5",
+        "group.py:publish_order_to_group",
+        "targets",
+        {
+            "order_id": order.id,
+            "targets": targets,
+            "has_claim_kb": bool(markup and markup.inline_keyboard),
+        },
+    )
+    # #endregion
     posts: dict[int, int] = {}
     errors: list[str] = []
-    for chat_id in _order_group_ids():
+    for chat_id in targets:
         msg = await _send_card(bot, chat_id, order, text, markup)
         if msg is not None:
             posts[chat_id] = msg.message_id
+            # #region agent log
+            agent_log(
+                "H5",
+                "group.py:publish_order_to_group",
+                "posted",
+                {
+                    "order_id": order.id,
+                    "chat_id": chat_id,
+                    "message_id": msg.message_id,
+                    "returned_markup": bool(msg.reply_markup),
+                },
+            )
+            # #endregion
         else:
             errors.append(str(chat_id))
     if posts:
@@ -254,13 +304,45 @@ async def process_claim(
 
     passenger = order.passenger
     private_text = order.to_driver_private_text(passenger)
+    from bot.debug_agent import agent_log
+
     try:
         kb = deal_kb(order.id)
+        # #region agent log
+        agent_log(
+            "H3",
+            "group.py:process_claim",
+            "before_deal_send",
+            {
+                "order_id": order.id,
+                "user_id": user.id,
+                "kb_rows": len(kb.inline_keyboard),
+                "kb_dump": kb.model_dump(exclude_none=True),
+            },
+        )
+        # #endregion
         sent_msg = await bot.send_message(
             chat_id=user.id,
             text=private_text,
             reply_markup=kb,
         )
+        # #region agent log
+        agent_log(
+            "H3",
+            "group.py:process_claim",
+            "after_deal_send",
+            {
+                "order_id": order.id,
+                "message_id": sent_msg.message_id,
+                "returned_markup": bool(sent_msg.reply_markup),
+                "returned_rows": (
+                    len(sent_msg.reply_markup.inline_keyboard)
+                    if sent_msg.reply_markup
+                    else 0
+                ),
+            },
+        )
+        # #endregion
         if sent_msg.reply_markup is None:
             try:
                 await bot.edit_message_reply_markup(
@@ -268,10 +350,34 @@ async def process_claim(
                     message_id=sent_msg.message_id,
                     reply_markup=kb,
                 )
-            except TelegramBadRequest:
+                # #region agent log
+                agent_log(
+                    "H3",
+                    "group.py:process_claim",
+                    "deal_markup_reattached",
+                    {"order_id": order.id, "message_id": sent_msg.message_id},
+                )
+                # #endregion
+            except TelegramBadRequest as exc:
                 logger.warning("deal_kb qayta qo'yilmadi order=%s", order.id)
+                # #region agent log
+                agent_log(
+                    "H3",
+                    "group.py:process_claim",
+                    "deal_markup_reattach_fail",
+                    {"order_id": order.id, "error": str(exc)[:200]},
+                )
+                # #endregion
         await set_order_claim_message(session, order.id, sent_msg.message_id)
     except TelegramForbiddenError:
+        # #region agent log
+        agent_log(
+            "H4",
+            "group.py:process_claim",
+            "forbidden_dm",
+            {"order_id": order.id, "user_id": user.id},
+        )
+        # #endregion
         await release_claim(session, order.id, user.id)
         await edit_group_card(
             bot,

@@ -269,7 +269,25 @@ async def bootstrap_flags(session_maker: async_sessionmaker) -> None:
         async with session_maker() as session:
             await load_flags(session)
             await session.commit()
-        logger.info("Feature flags loaded: %s", snapshot())
+        snap = snapshot()
+        logger.info("Feature flags loaded: %s", snap)
+        # #region agent log
+        try:
+            from bot.debug_agent import agent_log
+
+            agent_log(
+                "H1",
+                "feature_flags.py:bootstrap_flags",
+                "loaded",
+                {
+                    "passenger_dm": snap.get("passenger_dm"),
+                    "passenger_relay": snap.get("passenger_relay"),
+                    "order_button": snap.get("order_button"),
+                },
+            )
+        except Exception:
+            pass
+        # #endregion
     except Exception:
         logger.exception("Feature flags yuklanmadi — defaultlar")
         apply_snapshot(dict(_FLAG_DEFAULTS))

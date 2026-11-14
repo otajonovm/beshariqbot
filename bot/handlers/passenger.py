@@ -47,9 +47,29 @@ async def _notify_passenger_dm_drivers(bot, session: AsyncSession, order) -> Non
     from sqlalchemy import select
 
     from bot.database.models import Driver
+    from bot.debug_agent import agent_log
     from bot.services.feature_flags import driver_feature_enabled, is_enabled
 
+    # #region agent log
+    agent_log(
+        "H1",
+        "passenger.py:_notify_passenger_dm_drivers",
+        "entry",
+        {
+            "order_id": getattr(order, "id", None),
+            "flag_enabled": is_enabled("passenger_dm"),
+        },
+    )
+    # #endregion
     if not is_enabled("passenger_dm"):
+        # #region agent log
+        agent_log(
+            "H1",
+            "passenger.py:_notify_passenger_dm_drivers",
+            "skipped_flag_off",
+            {"order_id": getattr(order, "id", None)},
+        )
+        # #endregion
         return
     try:
         drivers = list((await session.execute(select(Driver))).scalars().all())
@@ -62,6 +82,7 @@ async def _notify_passenger_dm_drivers(bot, session: AsyncSession, order) -> Non
         f"👥 {order.seats or '—'}\n"
         f"📞 <code>{order.phone}</code>"
     )
+    sent = 0
     for d in drivers:
         if not d.is_access_valid():
             continue
@@ -69,10 +90,19 @@ async def _notify_passenger_dm_drivers(bot, session: AsyncSession, order) -> Non
             continue
         try:
             await bot.send_message(d.telegram_id, text)
+            sent += 1
         except TelegramForbiddenError:
             continue
         except Exception:
             continue
+    # #region agent log
+    agent_log(
+        "H2",
+        "passenger.py:_notify_passenger_dm_drivers",
+        "sent_dms",
+        {"order_id": getattr(order, "id", None), "sent": sent},
+    )
+    # #endregion
 
 
 async def _handle_driver_book(
