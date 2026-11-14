@@ -1,8 +1,9 @@
-"""Bot reklamasi: per-group interval, banner+caption, rate-limit, 429."""
+"""Bot reklamasi: per-group interval, banner+caption, eski postni o'chirish, rate-limit, 429."""
 
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import random
 from datetime import datetime, timedelta
@@ -69,9 +70,8 @@ def ad_keyboard(
     label = (button_text if button_text is not None else cfg["button_text"]) or (
         app_settings.DEFAULT_AD_BUTTON
     )
-    if label.startswith("🔴"):
-        label = "🟢" + label[1:]
-    label = (label if label.startswith("🟢") else f"🟢 {label}")[:64]
+    # Matn admin yozganidek. Yashil rang style="success" orqali (qo'llab-quvvatlasa).
+    label = label.strip()[:64] or app_settings.DEFAULT_AD_BUTTON
     url = f"https://t.me/{user}?start=order"
     rows: list[list[InlineKeyboardButton]] = [
         [
@@ -146,6 +146,21 @@ def caption_ok(text: str) -> tuple[bool, str]:
     return True, t
 
 
+def compose_caption(text: str, dispatcher_phone: str | None = None) -> str:
+    """Caption. Dispetcher raqami berilsa va matnda yo'q bo'lsa, pastiga qo'shiladi.
+
+    Telegram inline tugmada tel: qabul qilinmaydi — raqam shu yerda ham ko'rinadi,
+    tugma esa wa.me havolasiga olib boradi.
+    """
+    cap = (text or "").strip()
+    phone = (dispatcher_phone or "").strip()
+    if phone and phone not in cap:
+        extra = f"\n\n📞 Dispetcher: <code>{html.escape(phone)}</code>"
+        if len(cap) + len(extra) <= CAPTION_LIMIT:
+            cap = cap + extra
+    return cap[:CAPTION_LIMIT]
+
+
 def resolve_banner_source(photo_file_id: str | None) -> str | Path | None:
     """file_id | Path | None (faqat matn)."""
     fid = (photo_file_id or "").strip()
@@ -205,6 +220,52 @@ def _effective_interval(group: BotGroup, base_sec: int, now: datetime) -> int:
     if boost and boost > now:
         return max(30, base_sec * 2)
     return max(30, base_sec)
+
+
+async def _delete_old(bot: Bot, group: BotGroup) -> None:
+    """Yangi reklamadan oldin shu guruhdagi eski postni o'chirish.
+
+    O'chirish xato bersa log yoziladi va yangi post baribir ketadi.
+    """
+    mid = group.last_ad_message_id
+    if not mid:
+        return
+    try:
+        await bot.delete_message(group.chat_id, mid)
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        logger.info(
+            "Eski reklama o'chmadi chat=%s mid=%s: %s",
+            group.chat_id,
+            mid,
+            exc,
+        )
+    except Exception:
+        logger.exception("Eski reklama o'chirish xato chat=%s mid=%s", group.chat_id, mid)
+
+
+async def warn_groups_missing_rights(bot: Bot, session: AsyncSession) -> int:
+    """Reklama yoqilgan, lekin yozish huquqi yo'q guruhlarni bir marta ogohlantirib o'tkazish."""
+    stmt = select(BotGroup).where(
+        BotGroup.approved.is_(True),
+        BotGroup.flag_bot_ads.is_(True),
+        BotGroup.can_post.is_(False),
+        BotGroup.ad_permission_warned.is_(False),
+    )
+    rows = list((await session.execute(stmt)).scalars().all())
+    warned = 0
+    for group in rows:
+        group.ad_permission_warned = True
+        warned += 1
+        await notify_admins(
+            bot,
+            f"⚠️ Reklama o'tkazib yuborildi: <b>{group.title or group.chat_id}</b>\n"
+            f"ID: <code>{group.chat_id}</code>\n"
+            f"Bot admin emas yoki rasm/xabar yuborish huquqi yo'q.\n"
+            f"Huquq berilgach keyingi siklda qayta uriniladi.",
+        )
+    if warned:
+        await session.flush()
+    return warned
 
 
 async def _send_ad_message(
@@ -272,11 +333,12 @@ async def send_one_group(
     now = datetime.now(TZ)
     username = await resolve_bot_username(bot)
     kb = ad_keyboard(bot_username=username)
-    caption = cfg["text"]
+    caption = compose_caption(cfg["text"], cfg.get("dispatcher_phone"))
     banner = resolve_banner_source(cfg["photo_file_id"])
     chat_id = group.chat_id
 
     await wait_chat_slot(chat_id)
+    await _delete_old(bot, group)
 
     try:
         msg = await _send_ad_message(bot, chat_id, caption, banner, kb)
@@ -357,6 +419,7 @@ async def send_ad_to_groups(
     cfg = app_settings.ad_config()
     if not force and not cfg["enabled"]:
         return 0, 0
+    await warn_groups_missing_rights(bot, session)
     groups = await list_ad_groups(session)
     if not groups:
         return 0, 0
@@ -403,6 +466,7 @@ async def check_bot_ads(bot: Bot, session_maker: async_sessionmaker) -> None:
         return
 
     async with session_maker() as session:
+        await warn_groups_missing_rights(bot, session)
         groups = await list_ad_groups(session)
         due: list[BotGroup] = []
         for g in groups:
@@ -410,6 +474,7 @@ async def check_bot_ads(bot: Bot, session_maker: async_sessionmaker) -> None:
             if nxt is None or nxt <= now:
                 due.append(g)
         if not due:
+            await session.commit()
             return
         # Bir tickda ko'pi bilan bir nechta, jitter bilan
         ok = fail = 0
@@ -431,7 +496,8 @@ async def send_preview_to_admin(bot: Bot, admin_id: int) -> None:
     username = await resolve_bot_username(bot)
     kb = ad_keyboard(bot_username=username)
     banner = resolve_banner_source(cfg["photo_file_id"])
-    await _send_ad_message(bot, admin_id, cfg["text"], banner, kb)
+    caption = compose_caption(cfg["text"], cfg.get("dispatcher_phone"))
+    await _send_ad_message(bot, admin_id, caption, banner, kb)
 
 
 async def record_ad_click(session: AsyncSession, user_id: int) -> None:

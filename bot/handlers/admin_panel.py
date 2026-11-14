@@ -1187,7 +1187,8 @@ async def adm_stats_menu(callback: CallbackQuery) -> None:
 async def adm_stats_period(callback: CallbackQuery, session: AsyncSession) -> None:
     days = int((callback.data or "").rsplit(":", 1)[-1])
     st = await get_admin_period_stats(session, days=days)
-    clicks, ad_orders = await ad_stats(session, days=days)
+    clicks_today, orders_today = await ad_stats(session, days=1)
+    clicks_week, orders_week = await ad_stats(session, days=7)
     label = "Bugun" if days <= 1 else f"{days} kun"
     text = (
         f"📊 <b>Statistika — {label}</b>\n\n"
@@ -1198,7 +1199,8 @@ async def adm_stats_period(callback: CallbackQuery, session: AsyncSession) -> No
         f"💳 To'lov kutilmoqda: <b>{st.payment_due}</b>\n"
         f"🚕 Yo'lovchi so'rovlari: <b>{st.passenger_orders}</b>\n"
         f"🚖 Tasdiqlangan safarlar: <b>{st.driver_announces}</b>\n"
-        f"📣 Reklamadan: <b>{clicks}</b> bosish, <b>{ad_orders}</b> buyurtma"
+        f"📣 Reklamadan bugun / 7 kun: <b>{clicks_today}</b> / <b>{clicks_week}</b> bosish, "
+        f"<b>{orders_today}</b> / <b>{orders_week}</b> buyurtma"
     )
     await _edit_or_answer(callback, text, admin_stats_kb())
     await callback.answer()

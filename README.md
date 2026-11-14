@@ -168,12 +168,20 @@ Deploy oldidan DB zaxira nusxasi oling (yuqoridagi bo'lim).
 
 ### Reklama (`/admin` → 📣 Reklama)
 
-- **Interval:** 30 s, 1/2/5/10/30 min, 1/2/3 soat (`ad_interval_sec`). Eski soatli qiymat avtomatik soniyaga o‘tadi.
-- **Davomiylik:** Doimiy (faol soatlarda) yoki 1/2/3 soat — tugasa o‘zi to‘xtaydi, adminga xabar.
-- **Dizayn:** banner (`assets/ad_banner.jpg` yoki admin yuklagan) + HTML caption + «🚕 Taksi buyurtma berish» (`?start=order`). Ixtiyoriy «📞 Dispetcher».
-- Har guruhda `next_run_at`, guruhlar orasida 1–2 s jitter. Eski reklama **o‘chirilmaydi** — yangisi qo‘shiladi. Avto-e'lon bilan umumiy **20/min/guruh** limit.
-- Bot **admin** bo‘lgan barcha **guruh va kanallarga** yuboriladi (default yoqiq). Kanalga botni admin qiling va **Post Messages** huquqini bering. Bitta joyini «Bot reklamasi» ❌ bilan o‘chirish mumkin; **426 Global** alohida ham yoqiladi.
-- Statistika: reklamadan bosishlar + `source=ad` buyurtmalar.
+- **Interval:** 30 s, 1/2/5/10/30 min, 1/2/3 soat. DB kaliti `ad_interval_sec` (soniya). Eski `ad_interval_hours` × 3600, eski `ad_interval_minutes` / `ad_interval_min` × 60 — faqat `ad_interval_sec` hali yo‘q bo‘lsa, bir marta. Mavjud soniya qiymati ustidan yozilmaydi.
+- **Davomiylik:** Doimiy (faol soatlarda) yoki 1/2/3 soat — tugasa o‘zi to‘xtaydi, adminga xabar. Vaqt zonasi: **Asia/Tashkent**.
+- **Dizayn:** banner (`assets/ad_banner.jpg` yoki admin yuklagan `file_id`) + HTML caption (max 1024) + «🚕 Taksi buyurtma berish» (`https://t.me/<getMe username>?start=order`). Ixtiyoriy «📞 Dispetcher»: Telegram inline tugmada `tel:` qabul qilinmaydi, shuning uchun tugma `https://wa.me/<raqam>` va raqam caption pastida ham chiqadi.
+- Har guruhda alohida `next_run_at`. Bir siklda guruhlar orasida **1–2 s** jitter (hammasi bir zumda emas). Yangi reklamadan **oldin** o‘sha guruhdagi eski post o‘chiriladi (`last_ad_message_id`). O‘chirish xato bersa log yoziladi va yangisi baribir yuboriladi.
+- Avto-e'lon va reklama umumiy **20 xabar/daqiqa/guruh** limitda. `RetryAfter` bo‘lsa berilgan vaqt kutib davom etadi va shu guruhning intervali vaqtincha 2 barobar.
+- Faqat admin «Bot reklamasi» ni yoqqan guruh/kanallar + alohida global yoqish/o‘chirish. Bot admin emas yoki rasm yubora olmasa — guruh o‘tkaziladi va admin **bir marta** ogohlantiriladi.
+- Statistika: `Reklamadan bugun / 7 kun: X bosish, Y buyurtma` (`ad_clicks` + `orders.source=ad`).
+
+Yangi majburiy env yo‘q. Birinchi defaultlar (panel darhol DB dagi qiymatni oladi, restart shart emas):
+
+| Env | Ma'nosi |
+| --- | --- |
+| `AD_INTERVAL_HOURS` | `ad_interval_sec` hali yo‘q bo‘lsa boshlang‘ich soat. Standart: `2` |
+| `AD_ACTIVE_FROM` / `AD_ACTIVE_TO` | Faol soat default. Standart: `07:00`–`23:00` |
 
 ### Super-admin funksiyalar (`/admin` → ⭐ Premium)
 
