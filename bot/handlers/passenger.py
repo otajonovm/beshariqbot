@@ -221,6 +221,23 @@ async def cmd_start(
     # Guruhdagi "Buyurtmani olish" → t.me/bot?start=claim_123
     # Ro'yxatdan o'tish shart emas — guruh a'zosi to'g'ridan-to'g'ri olishi mumkin.
     payload = (command.args or "").strip()
+    # #region agent log
+    try:
+        from bot.debug_agent import agent_log
+
+        agent_log(
+            "H4",
+            "passenger.py:cmd_start",
+            "start",
+            {
+                "user_id": user.id,
+                "payload": payload[:40],
+                "chat_type": getattr(message.chat, "type", None),
+            },
+        )
+    except Exception:
+        pass
+    # #endregion
     if payload.startswith("claim_"):
         try:
             order_id = int(payload.split("_", 1)[1])
@@ -398,6 +415,8 @@ async def _finish_taxi(
     session: AsyncSession,
     contact_phone: str,
 ) -> None:
+    from bot.debug_agent import agent_log
+
     user = message.from_user
     if user is None:
         return
@@ -407,6 +426,18 @@ async def _finish_taxi(
 
     phone = _normalize_phone(contact_phone) or contact_phone
     data = await state.get_data()
+    # #region agent log
+    agent_log(
+        "H5",
+        "passenger.py:_finish_taxi",
+        "creating_order",
+        {
+            "user_id": user.id,
+            "direction": data.get("direction"),
+            "has_seats": bool(data.get("seats")),
+        },
+    )
+    # #endregion
     await upsert_user(session, user.id, user.full_name, user.username, phone=phone)
     source = data.get("order_source")
     order = await create_order(
@@ -426,6 +457,14 @@ async def _finish_taxi(
 
     posted = await publish_order_to_group(message.bot, session, order)
     await _notify_passenger_dm_drivers(message.bot, session, order)
+    # #region agent log
+    agent_log(
+        "H5",
+        "passenger.py:_finish_taxi",
+        "order_done",
+        {"order_id": order.id, "posted": posted},
+    )
+    # #endregion
     if posted:
         await message.answer(
             f"✅ Buyurtma qabul qilindi! Raqam: <b>#{order.id}</b>\n\n"
