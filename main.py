@@ -333,6 +333,9 @@ async def main() -> None:
     scheduler = setup_scheduler(bot, async_session_maker)
 
     # Relay birinchi: yuborish DbSession ochilishidan oldin bajariladi.
+    from bot.debug_agent import DebugUpdateMiddleware
+
+    dp.update.outer_middleware(DebugUpdateMiddleware())
     dp.update.outer_middleware(RelayMiddleware())
     dp.update.outer_middleware(DbSessionMiddleware())
     # auto_post / driver passenger dan oldin: e'lon yo'nalishi tugmalari chalkashmasin
