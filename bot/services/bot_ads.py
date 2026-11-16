@@ -159,7 +159,7 @@ def resolve_banner_source(photo_file_id: str | None) -> str | Path | None:
 async def list_ad_groups(session: AsyncSession) -> list[BotGroup]:
     """Bot admin bo'lgan guruh + kanallar (flag_bot_ads o'chiq = istisno).
 
-    426 Global: flag yoqiq yoki «426 Global reklama» yoqiq bo'lsa.
+    426 Global: faqat «426 Global reklama» alohida yoqiq bo'lsa (default o'chiq).
     """
     from bot.services.bot_groups import ensure_known_groups
 
@@ -175,7 +175,8 @@ async def list_ad_groups(session: AsyncSession) -> list[BotGroup]:
             continue
         is_main = g.is_main or g.chat_id == main_id
         if is_main and not g.is_channel():
-            if g.flag_bot_ads or cfg["main_group_enabled"]:
+            # Asosiy hub — reklama default yo'q; faqat alohida yoqilsa
+            if cfg["main_group_enabled"] and g.flag_bot_ads:
                 out.append(g)
             continue
         # Guruh yoki kanal: reklama flagi yoqiq (default ON)

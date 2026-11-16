@@ -43,6 +43,8 @@ def test_interval_choices_include_30s_and_hours():
     assert 60 in apps.AD_INTERVAL_CHOICES
     assert 3600 in apps.AD_INTERVAL_CHOICES
     assert 10800 in apps.AD_INTERVAL_CHOICES
+    assert 43200 in apps.AD_INTERVAL_CHOICES  # 12 soat
+    assert 86400 in apps.AD_INTERVAL_CHOICES  # 24 soat
 
 
 def test_legacy_hours_to_seconds():
@@ -187,6 +189,38 @@ async def test_list_ad_groups_includes_channels(session):
     ids = {g.chat_id for g in groups}
     assert -3001 in ids
     assert -3002 not in ids
+
+
+@pytest.mark.asyncio
+async def test_list_ad_groups_excludes_main_by_default(session):
+    apps._cache["ad_all_admin_groups_v1"] = True
+    apps._cache["ad_main_off_v1"] = True
+    apps._cache["ad_main_group_enabled"] = False
+    main_id = apps.resolved_main_group_id()
+    session.add(
+        BotGroup(
+            chat_id=main_id,
+            title="426. Global",
+            is_main=True,
+            flag_bot_ads=True,  # eski holat — baribir chiqmasin
+            approved=True,
+            can_post=True,
+        )
+    )
+    session.add(
+        BotGroup(
+            chat_id=-4001,
+            title="Other",
+            flag_bot_ads=True,
+            approved=True,
+            can_post=True,
+        )
+    )
+    await session.commit()
+    groups = await bot_ads.list_ad_groups(session)
+    ids = {g.chat_id for g in groups}
+    assert main_id not in ids
+    assert -4001 in ids
 
 
 @pytest.mark.asyncio

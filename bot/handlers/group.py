@@ -49,14 +49,50 @@ async def on_bot_chat_member(event: ChatMemberUpdated) -> None:
     if user is not None and chat_type != "channel":
         admin_cache.apply_status(event.chat.id, user.id, event.new_chat_member.status)
 
-    # Kanal: faqat admin/creator (member post qila olmaydi)
-    if chat_type == "channel":
-        if event.new_chat_member.status not in {"administrator", "creator"}:
-            return
-    elif event.new_chat_member.status not in {"administrator", "member", "creator"}:
+    status = event.new_chat_member.status
+    # Bot guruhdan chiqarilsa — e'lon/reklama targetidan olib tashlash
+    if status in {"left", "kicked"}:
+        # #region agent log
+        try:
+            from bot.debug_agent import agent_log
+
+            agent_log(
+                "H8",
+                "group.py:on_bot_chat_member",
+                "bot_left_or_kicked",
+                {"chat_id": event.chat.id, "status": status, "title": event.chat.title},
+            )
+        except Exception:
+            pass
+        # #endregion
+        try:
+            from bot.database.models import async_session_maker
+            from bot.services.bot_groups import mark_group_unreachable
+
+            async with async_session_maker() as session:
+                await mark_group_unreachable(
+                    session, event.chat.id, reason=f"my_chat_member:{status}"
+                )
+                await session.commit()
+        except Exception:
+            logger.exception("Kicked guruh DB yangilanmadi %s", event.chat.id)
+        await notify_admins(
+            event.bot,
+            f"🚫 Bot guruhdan chiqarildi ({status}):\n"
+            f"<b>{event.chat.title or event.chat.id}</b>\n"
+            f"ID: <code>{event.chat.id}</code>\n"
+            f"E'lon/reklama shu guruhga bormaydi.",
+        )
         return
 
-    note_group(event.chat.id, event.chat.title or "", event.new_chat_member.status)
+    # Kanal: faqat admin/creator (member post qila olmaydi)
+    if chat_type == "channel":
+        if status not in {"administrator", "creator"}:
+            return
+    elif status not in {"administrator", "member", "creator"}:
+        return
+
+    note_group(event.chat.id, event.chat.title or "", status)
     known = event.chat.id in settings.group_ids
     kind = "kanal" if chat_type == "channel" else "guruh"
     logger.info(

@@ -83,14 +83,24 @@ async def ensure_known_groups(session: AsyncSession) -> None:
         row.is_main = True
         row.flag_driver_posts = False
         row.flag_auto_posts = False
-    # Bir martalik: barcha tasdiqlangan guruhlarda reklama yoqilsin
+        row.flag_bot_ads = False  # 426 Global — reklama default o'chiq
+    # Bir martalik: barcha tasdiqlangan guruhlarda reklama yoqilsin (asosiy emas)
     if not app_settings.get_cached("ad_all_admin_groups_v1"):
         await session.execute(
             update(BotGroup)
-            .where(BotGroup.approved.is_(True))
+            .where(BotGroup.approved.is_(True), BotGroup.chat_id != main_id)
             .values(flag_bot_ads=True)
         )
         await app_settings.set_setting(session, "ad_all_admin_groups_v1", True)
+    # Bir martalik: 426 Global reklamani o'chirish
+    if not app_settings.get_cached("ad_main_off_v1"):
+        await session.execute(
+            update(BotGroup)
+            .where(BotGroup.chat_id == main_id)
+            .values(flag_bot_ads=False)
+        )
+        await app_settings.set_setting(session, "ad_main_group_enabled", False)
+        await app_settings.set_setting(session, "ad_main_off_v1", True)
     await session.flush()
 
 
@@ -135,6 +145,29 @@ async def set_main_group(session: AsyncSession, chat_id: int) -> BotGroup | None
     row.flag_auto_posts = False
     await app_settings.set_setting(session, "main_group_id", chat_id)
     await session.flush()
+    return row
+
+
+async def mark_group_unreachable(
+    session: AsyncSession,
+    chat_id: int,
+    *,
+    reason: str = "",
+) -> BotGroup | None:
+    """Bot kicked/forbidden — e'lon va reklama o'chiriladi."""
+    row = await session.get(BotGroup, chat_id)
+    if row is None:
+        row = await upsert_group(session, chat_id, approved=False)
+    row.approved = False
+    row.can_post = False
+    row.can_delete = False
+    row.flag_driver_posts = False
+    row.flag_auto_posts = False
+    row.flag_bot_ads = False
+    row.flag_relay_source = False
+    row.updated_at = utcnow()
+    await session.flush()
+    logger.info("Guruh unreachable chat=%s reason=%s", chat_id, reason or "—")
     return row
 
 
@@ -185,12 +218,14 @@ async def refresh_group_meta(bot: Bot, session: AsyncSession, chat_id: int) -> B
 
 
 def driver_post_chat_ids(groups: list[BotGroup] | None, *, auto: bool = False) -> list[int]:
-    """Haydovchi / avto e'lon guruhlari (asosiy emas, kanal emas)."""
+    """Haydovchi / avto e'lon guruhlari (asosiy emas, kanal emas, can_post)."""
     if not groups:
         return list(settings.resolved_driver_post_group_ids)
     out: list[int] = []
     for g in groups:
         if not g.approved:
+            continue
+        if g.can_post is False:
             continue
         if g.is_main or g.is_channel():
             continue
@@ -199,6 +234,7 @@ def driver_post_chat_ids(groups: list[BotGroup] | None, *, auto: bool = False) -
         if not auto and not g.flag_driver_posts:
             continue
         out.append(g.chat_id)
+    # Fallback faqat hali DB da hech narsa yo'q bo'lsa
     return out or list(settings.resolved_driver_post_group_ids)
 
 

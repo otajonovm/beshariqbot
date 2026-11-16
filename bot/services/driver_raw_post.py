@@ -48,6 +48,8 @@ class RawPayload:
 _last_raw: dict[int, RawPayload] = {}
 # telegram_id -> soatlik yuborish vaqtlari (monotonic)
 _post_times: dict[int, deque[float]] = defaultdict(deque)
+# Bot kicked / forbidden guruhlar — e'lon targetidan chiqariladi
+_unreachable_chats: set[int] = set()
 _HOUR = 3600.0
 
 
@@ -108,11 +110,16 @@ def compose_body(
 def post_targets(driver: Driver | None = None) -> list[int]:
     """Ulangan guruhlar; 426. Global (faqat taksi hub) chiqarilgan.
 
-    multi_group o'chiq bo'lsa — faqat birinchi guruh.
+    multi_group o'chiq bo'lsa — faqat birinchi **yetarli** guruh.
+    Kicked/forbidden guruhlar (_unreachable_chats) chiqariladi.
     """
     from bot.services.feature_flags import driver_feature_enabled
 
-    targets = list(settings.resolved_driver_post_group_ids)
+    targets = [
+        cid
+        for cid in settings.resolved_driver_post_group_ids
+        if cid not in _unreachable_chats
+    ]
     if driver is not None and not driver_feature_enabled("multi_group", driver):
         return targets[:1]
     return targets
@@ -174,25 +181,96 @@ async def send_one(
     return await _send_with_retry(bot, chat_id, text, photo, markup)
 
 
+async def _mark_unreachable_chat(chat_id: int, reason: str) -> None:
+    """Kicked/forbidden guruhni DB dan e'lon targetidan chiqarish."""
+    _unreachable_chats.add(chat_id)
+    try:
+        from bot.database.models import async_session_maker
+        from bot.services.bot_groups import mark_group_unreachable
+
+        async with async_session_maker() as session:
+            await mark_group_unreachable(session, chat_id, reason=reason)
+            await session.commit()
+    except Exception:
+        logger.exception("unreachable mark fail chat=%s", chat_id)
+
+
+def _is_unreachable_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(
+        token in text
+        for token in (
+            "forbidden",
+            "kicked",
+            "bot was kicked",
+            "chat not found",
+            "bot is not a member",
+            "have no rights",
+            "not enough rights",
+        )
+    )
+
+
 async def post_to_main(
     bot: Bot,
     driver: Driver,
     payload: RawPayload,
 ) -> tuple[int | None, str | None, int | None]:
-    """Birinchi guruhga darhol. (chat_id, error, message_id)."""
+    """Birinchi muvaffaqiyatli guruhga darhol. (chat_id, error, message_id).
+
+    Birinchi target kicked bo'lsa — keyingilarini sinab ko'radi.
+    """
     targets = post_targets(driver)
     if not targets:
         return None, "Guruhlar sozlanmagan", None
-    main = targets[0]
-    try:
-        mid = await send_one(bot, main, payload, driver)
-        return main, None, mid
-    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter, TelegramNetworkError) as exc:
-        logger.warning("raw post main fail %s: %s", main, exc)
-        return main, str(exc), None
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("raw post main unexpected %s", main)
-        return main, str(exc), None
+    last_err: str | None = None
+    last_chat: int | None = None
+    for main in targets:
+        last_chat = main
+        try:
+            mid = await send_one(bot, main, payload, driver)
+            # #region agent log
+            try:
+                from bot.debug_agent import agent_log
+
+                agent_log(
+                    "H8",
+                    "driver_raw_post.py:post_to_main",
+                    "posted_ok",
+                    {"chat_id": main, "message_id": mid},
+                    run_id="post-fix",
+                )
+            except Exception:
+                pass
+            # #endregion
+            return main, None, mid
+        except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter, TelegramNetworkError) as exc:
+            last_err = str(exc)
+            logger.warning("raw post main fail %s: %s", main, exc)
+            # #region agent log
+            try:
+                from bot.debug_agent import agent_log
+
+                agent_log(
+                    "H8",
+                    "driver_raw_post.py:post_to_main",
+                    "target_fail_try_next",
+                    {"chat_id": main, "error": last_err[:180]},
+                    run_id="post-fix",
+                )
+            except Exception:
+                pass
+            # #endregion
+            if _is_unreachable_error(exc):
+                await _mark_unreachable_chat(main, reason=last_err[:200])
+            # 429 — keyingiga o'tmasdan qaytaramiz (rate limit)
+            if isinstance(exc, TelegramRetryAfter):
+                return main, last_err, None
+            continue
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("raw post main unexpected %s", main)
+            return main, str(exc), None
+    return last_chat, last_err or "xato", None
 
 
 async def post_to_rest(

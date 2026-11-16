@@ -48,6 +48,7 @@ SETTING_DEFAULTS: dict[str, Any] = {
     "ad_active_to": "23:00",
     "ad_last_sent_at": "",
     "ad_all_admin_groups_v1": False,  # bir martalik: barcha guruhlarda reklama ON
+    "ad_main_off_v1": False,  # bir martalik: 426 Global reklama OFF
     "passenger_dm_off_v1": False,  # bir martalik: so'rovlar lichkaga OFF
     "main_group_id": None,
 }
@@ -63,6 +64,8 @@ AD_INTERVAL_CHOICES: tuple[int, ...] = (
     3600,
     7200,
     10800,
+    43200,   # 12 soat
+    86400,   # 24 soat
 )
 
 # Davomiylik: 0 = doimiy
